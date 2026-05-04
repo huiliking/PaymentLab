@@ -1,0 +1,34 @@
+## First time run:
+
+[SERVER]
+
+cd payment-lab/server
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+
+[CLIENT]
+cd payment-lab/client
+npm install
+npm run dev
+
+## Afterwards
+
+[SERVER]
+cd payment-lab/server
+venv\Scripts\activate
+python app.py
+
+[CLIENT]
+cd payment-lab/client
+npm install
+npm run dev
+
+## To see SQL records
+
+cd payment-lab/server
+python -c "import sqlite3; conn = sqlite3.connect('payment_lab.db'); conn.row_factory = sqlite3.Row; [print(dict(r)) for r in conn.execute('SELECT * FROM orders')]; print(); [print(dict(r)) for r in conn.execute('SELECT * FROM audit_log')]"
+
+## Ollama
+ollama run llama3.2
