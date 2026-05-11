@@ -21,10 +21,12 @@ def create_app():
     from routes.checkout import checkout_bp
     from routes.products import products_bp
     from routes.config import config_bp
+    from routes.fraud import fraud_bp
 
     app.register_blueprint(checkout_bp, url_prefix="/api")
     app.register_blueprint(products_bp, url_prefix="/api")
     app.register_blueprint(config_bp, url_prefix="/api")
+    app.register_blueprint(fraud_bp, url_prefix="/api")
 
     # Initialize database
     from models.database import init_db

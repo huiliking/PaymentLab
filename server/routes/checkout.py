@@ -14,11 +14,114 @@ LOCALIZATION HOOKS (to be expanded):
 """
 
 import stripe
+import uuid
+import sqlite3
+import json
+from datetime import datetime
 from flask import Blueprint, jsonify, request, current_app
-from models.database import create_order, log_audit_event
+from models.database import create_order, log_audit_event, DB_PATH
 from ai_agents.transaction_auditor import TransactionAuditor
 
 checkout_bp = Blueprint("checkout", __name__)
+
+
+def record_live_transaction(intent, order_id, locale, billing_country, billing_address):
+    """
+    Write a completed Stripe payment into the transactions table
+    and run the fraud rule pre-screen. Called after payment succeeds.
+
+    Returns (txn_id, triggers).
+    """
+    # Stripe objects support both attribute and dict-style access via .get()
+    # Normalise to plain dict so the rest of the function is unambiguous.
+    if not isinstance(intent, dict):
+        intent = dict(intent)
+
+    # Pull card details — payment_method may be an expanded object or a string ID
+    pm = intent.get("payment_method")
+    card = {}
+    if isinstance(pm, dict):
+        card = pm.get("card", {}) or {}
+    elif pm and isinstance(pm, str):
+        try:
+            pm_obj = stripe.PaymentMethod.retrieve(pm)
+            card = dict(pm_obj.get("card") or {})
+        except Exception:
+            card = {}
+    elif pm:
+        # Already an expanded Stripe object
+        try:
+            card = dict(getattr(pm, "card", None) or pm.get("card") or {})
+        except Exception:
+            card = {}
+
+    txn_id = str(uuid.uuid4())
+    shipping_address = None
+    if billing_address:
+        parts = [
+            billing_address.get("line1", ""),
+            billing_address.get("line2", ""),
+            billing_address.get("city", ""),
+            billing_address.get("state", ""),
+            billing_address.get("postalCode", ""),
+            billing_country or billing_address.get("country", ""),
+        ]
+        shipping_address = ", ".join(p for p in parts if p)
+
+    # ip_country: derive from locale as proxy (real app would use GeoIP)
+    ip_country = locale.split("-")[-1] if "-" in locale else locale.upper()
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        INSERT OR IGNORE INTO transactions
+        (id, stripe_payment_intent, card_last4, card_brand, card_country,
+         amount_cents, currency, status, customer_email, customer_name,
+         billing_country, billing_postal, shipping_address,
+         browser_locale, ip_country, device_fingerprint, created_at, metadata)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        txn_id,
+        intent.get("id", ""),
+        card.get("last4") or "0000",
+        card.get("brand") or "unknown",
+        card.get("country") or "US",
+        intent.get("amount", 0),
+        intent.get("currency", "usd"),
+        intent.get("status", "succeeded"),
+        intent.get("receipt_email") or "",
+        "",
+        billing_country or "",
+        billing_address.get("postalCode", "") if billing_address else "",
+        shipping_address or "",
+        locale,
+        ip_country,
+        request.headers.get("User-Agent", "")[:64],
+        datetime.now().isoformat(),
+        json.dumps({"order_id": order_id, "live": True})
+    ))
+    conn.commit()
+    conn.close()
+
+    # Run rule pre-screen
+    from ai_agents.fraud_investigator import RuleEngine
+    triggers = RuleEngine(DB_PATH).pre_screen(txn_id)
+
+    if triggers:
+        log_audit_event(order_id, "fraud_flagged", {
+            "txn_id": txn_id,
+            "triggers": triggers
+        })
+        risk_levels = [t["risk"] for t in triggers]
+        max_risk = max(risk_levels,
+                       key=lambda r: ["LOW", "MEDIUM", "HIGH", "CRITICAL"].index(r)
+                       if r in ["LOW", "MEDIUM", "HIGH", "CRITICAL"] else 0)
+        print(f"\n  [FRAUD] Live txn {txn_id[:12]}... flagged — {len(triggers)} triggers, max risk: {max_risk}")
+        for t in triggers:
+            print(f"  [FRAUD]   [{t['risk']}] {t['rule']}: {t.get('detail', '')}")
+    else:
+        print(f"\n  [FRAUD] Live txn {txn_id[:12]}... clean")
+
+    return txn_id, triggers
 
 
 # Currency precision: most currencies use 2 decimal places,
@@ -51,6 +154,7 @@ def create_payment_intent():
     customer_email = data.get("customer_email")
     locale = data.get("locale", "en-US")
     billing_country = data.get("billing_country")
+    billing_address = data.get("billing_address") or {}
 
     if not items:
         return jsonify({"error": "Cart is empty"}), 400
@@ -142,6 +246,10 @@ def create_payment_intent():
             metadata={
                 "customer_locale": locale,
                 "billing_country": billing_country or "unknown",
+                "billing_line1": (billing_address or {}).get("line1", ""),
+                "billing_city": (billing_address or {}).get("city", ""),
+                "billing_state": (billing_address or {}).get("state", ""),
+                "billing_postal": (billing_address or {}).get("postalCode", ""),
             },
             receipt_email=customer_email,
             # Future: add payment_method_types based on locale
@@ -184,15 +292,76 @@ def create_payment_intent():
 
 @checkout_bp.route("/payment-status/<payment_intent_id>", methods=["GET"])
 def payment_status(payment_intent_id):
-    """Check payment status — used for confirmation page."""
+    """
+    Check payment status — called by ConfirmationPage.
+    On first successful call, records the transaction in the fraud pipeline
+    and runs rule pre-screen. Subsequent calls are read-only (idempotent).
+    """
     stripe.api_key = current_app.config["STRIPE_SECRET_KEY"]
 
     try:
-        intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-        return jsonify({
+        intent = stripe.PaymentIntent.retrieve(
+            payment_intent_id,
+            expand=["payment_method"]   # get card details in one call
+        )
+
+        response = {
             "status": intent.status,
             "amount": intent.amount,
             "currency": intent.currency,
-        })
+        }
+
+        # Only record + screen on success, and only if not already recorded
+        if intent.status == "succeeded":
+            # Check if already recorded to keep idempotent
+            conn = sqlite3.connect(DB_PATH)
+            row = conn.execute(
+                "SELECT id FROM transactions WHERE stripe_payment_intent = ?",
+                (payment_intent_id,)
+            ).fetchone()
+            conn.close()
+
+            if not row:
+                # Pull billing info stored in PaymentIntent metadata
+                locale = intent.metadata.get("customer_locale", "en-US")
+                billing_country = intent.metadata.get("billing_country", "")
+
+                # Billing address: prefer payment_method, fall back to metadata
+                billing_address = None
+                pm = intent.payment_method
+                if isinstance(pm, stripe.PaymentMethod):
+                    ba = pm.billing_details.address
+                    if ba and ba.line1:
+                        billing_address = {
+                            "line1": ba.line1 or "",
+                            "line2": ba.line2 or "",
+                            "city": ba.city or "",
+                            "state": ba.state or "",
+                            "postalCode": ba.postal_code or "",
+                            "country": ba.country or billing_country,
+                        }
+
+                # Fall back to metadata stored at PaymentIntent creation
+                if not billing_address:
+                    meta = intent.metadata
+                    billing_address = {
+                        "line1": meta.get("billing_line1", ""),
+                        "city": meta.get("billing_city", ""),
+                        "state": meta.get("billing_state", ""),
+                        "postalCode": meta.get("billing_postal", ""),
+                        "country": billing_country,
+                    }
+
+                order_id = None  # we don't have it here; look it up if needed
+                txn_id, triggers = record_live_transaction(
+                    intent, order_id, locale, billing_country, billing_address
+                )
+                response["fraud_txn_id"] = txn_id
+                response["fraud_triggers"] = len(triggers)
+            else:
+                response["fraud_txn_id"] = row[0]
+
+        return jsonify(response)
+
     except stripe.error.StripeError as e:
         return jsonify({"error": str(e)}), 400

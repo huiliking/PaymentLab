@@ -111,6 +111,38 @@ export default function ConfirmationPage({ locale, currency }) {
           </div>
         </div>
 
+        {/* Fraud status */}
+        {status?.fraud_triggers > 0 && (
+          <div style={{
+            marginTop: '1.25rem',
+            padding: '0.75rem 1rem',
+            background: '#fff3e0',
+            border: '1px solid #ffa726',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '0.82rem',
+            fontFamily: 'var(--font-mono)',
+            color: '#e65100',
+          }}>
+            ⚠️ <strong>Fraud Lab:</strong> This transaction was flagged with{' '}
+            {status.fraud_triggers} risk signal{status.fraud_triggers > 1 ? 's' : ''}.{' '}
+            <a href="/fraud" style={{ color: '#e65100' }}>View in Fraud Lab →</a>
+          </div>
+        )}
+        {status?.fraud_triggers === 0 && (
+          <div style={{
+            marginTop: '1.25rem',
+            padding: '0.75rem 1rem',
+            background: 'var(--success-soft)',
+            border: '1px solid var(--success)',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '0.82rem',
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--success)',
+          }}>
+            ✅ <strong>Fraud Lab:</strong> No risk signals detected.
+          </div>
+        )}
+
         {/* Localization note */}
         <div style={{
           marginTop: '1.25rem',

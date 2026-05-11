@@ -6,7 +6,10 @@ cd payment-lab/server
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
-copy .env.example .env
+(Skip this step if stripe API key already copied in .env) copy .env.example .env 
+
+#  Seed the database
+python seed_transactions.py
 
 [CLIENT]
 cd payment-lab/client

@@ -17,7 +17,7 @@ export async function fetchProducts() {
   return res.json();
 }
 
-export async function createPaymentIntent({ items, currency, customerEmail, locale, billingCountry }) {
+export async function createPaymentIntent({ items, currency, customerEmail, locale, billingCountry, billingAddress }) {
   const res = await fetch(`${API_BASE}/create-payment-intent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -27,6 +27,7 @@ export async function createPaymentIntent({ items, currency, customerEmail, loca
       customer_email: customerEmail,
       locale,
       billing_country: billingCountry,
+      billing_address: billingAddress,
     }),
   });
   const data = await res.json();

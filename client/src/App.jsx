@@ -5,6 +5,7 @@ import { fetchConfig } from './utils/api'
 import ProductsPage from './pages/ProductsPage'
 import CheckoutPage from './pages/CheckoutPage'
 import ConfirmationPage from './pages/ConfirmationPage'
+import FraudDashboard from './pages/FraudDashboard'
 
 export default function App() {
   const [stripePromise, setStripePromise] = useState(null)
@@ -103,6 +104,15 @@ export default function App() {
           </select>
 
           {/* Cart indicator */}
+          <Link to="/fraud" style={{
+            textDecoration: 'none',
+            color: 'var(--ink-muted)',
+            fontSize: '0.9rem',
+            fontWeight: 500,
+          }}>
+            Fraud Lab
+          </Link>
+
           <Link to="/checkout" style={{
             textDecoration: 'none',
             display: 'flex',
@@ -150,6 +160,9 @@ export default function App() {
           } />
           <Route path="/confirmation" element={
             <ConfirmationPage locale={locale} currency={currency} />
+          } />
+          <Route path="/fraud" element={
+            <FraudDashboard />
           } />
         </Routes>
       </div>
