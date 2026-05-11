@@ -17,3 +17,7 @@ dist/
 # IDE
 .vscode/
 .idea/
+
+# Duplicate directories
+client/client/
+server/server/
