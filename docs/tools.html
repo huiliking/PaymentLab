@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PaymentLab Fraud Investigation Tool Registry</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #1f2937;
+            background: #f9fafb;
+        }
+
+        .header {
+            background: white;
+            border-bottom: 1px solid #e5e7eb;
+            padding: 2rem 1rem;
+        }
+
+        .container {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 0 1rem;
+        }
+
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #111827;
+        }
+
+        .version {
+            font-size: 0.875rem;
+            color: #6b7280;
+        }
+
+        .stats {
+            display: flex;
+            gap: 2rem;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #6b7280;
+        }
+
+        .stat-value.active { color: #059669; }
+        .stat-value.candidate { color: #d97706; }
+        .stat-value.total { color: #6b7280; }
+
+        .main {
+            padding: 2rem 0;
+        }
+
+        .category {
+            margin-bottom: 2rem;
+        }
+
+        .category-header {
+            background: linear-gradient(to right, #dbeafe, #bfdbfe);
+            padding: 1.5rem;
+            border: 1px solid #93c5fd;
+            border-radius: 0.5rem 0.5rem 0 0;
+        }
+
+        .category-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+        }
+
+        .category-question {
+            font-size: 0.875rem;
+            color: #4b5563;
+            font-style: italic;
+        }
+
+        .category-count {
+            font-size: 0.875rem;
+            color: #6b7280;
+            font-weight: 500;
+            margin-top: 0.5rem;
+        }
+
+        table {
+            width: 100%;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-top: none;
+            border-radius: 0 0 0.5rem 0.5rem;
+            border-collapse: collapse;
+        }
+
+        thead {
+            background: #f9fafb;
+        }
+
+        th {
+            padding: 0.75rem 1.5rem;
+            text-align: left;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #6b7280;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        td {
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        tbody tr:hover {
+            background: #f9fafb;
+        }
+
+        .tool-name {
+            font-family: 'Courier New', monospace;
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: #111827;
+        }
+
+        .tool-description {
+            font-size: 0.875rem;
+            color: #111827;
+            margin-bottom: 0.25rem;
+        }
+
+        .tool-detects {
+            font-size: 0.75rem;
+            color: #6b7280;
+        }
+
+        .tool-detects strong {
+            font-weight: 600;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+            font-weight: 500;
+            border-radius: 0.25rem;
+            border: 1px solid;
+        }
+
+        .badge.active {
+            background: #d1fae5;
+            color: #065f46;
+            border-color: #6ee7b7;
+        }
+
+        .badge.candidate {
+            background: #fef3c7;
+            color: #92400e;
+            border-color: #fcd34d;
+        }
+
+        .badge.builtin {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .badge.external {
+            background: #e9d5ff;
+            color: #6b21a8;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 2rem;
+            color: #6b7280;
+            font-size: 0.875rem;
+        }
+
+        .footer a {
+            color: #2563eb;
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="container">
+            <div class="header-content">
+                <div>
+                    <h1>PaymentLab Fraud Investigation Tool Registry</h1>
+                    <p class="version">Version 1.0.0</p>
+                </div>
+                <div class="stats">
+                    <div class="stat">
+                        <div class="stat-value active">8</div>
+                        <div class="stat-label">Active</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value candidate">22</div>
+                        <div class="stat-label">Candidate</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value total">30</div>
+                        <div class="stat-label">Total</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="main">
+        <div class="container">
+            <!-- Transaction Context -->
+            <div class="category">
+                <div class="category-header">
+                    <div class="category-title">💳 Transaction Context</div>
+                    <div class="category-question">"What happened?"</div>
+                    <div class="category-count">3 tools</div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 20%;">Tool Name</th>
+                            <th style="width: 45%;">Description</th>
+                            <th style="width: 12%;">Status</th>
+                            <th style="width: 15%;">Source</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><div class="tool-name">get_transaction_details</div></td>
+                            <td>
+                                <div class="tool-description">Get full details of a specific transaction including amount, card, email, billing/shipping address, locale, and timestamps.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Provides baseline context — amount, card, email, billing, shipping, locale, IP, device fingerprint</div>
+                            </td>
+                            <td><span class="badge active">Active</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_amount_anomaly</div></td>
+                            <td>
+                                <div class="tool-description">Flag unusual transaction amounts based on customer history, merchant average, and product category norms.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Unusually large/small amounts, round-number fraud, amount escalation patterns (card testing → large purchase)</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_3ds_result</div></td>
+                            <td>
+                                <div class="tool-description">Check whether 3D Secure (SCA) authentication passed, failed, was attempted, or was exempted for this transaction.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> SCA bypass attempts, liability shift status, exemption abuse (low-value, TRA, recurring)</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge external">External API</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Identity History -->
+            <div class="category">
+                <div class="category-header">
+                    <div class="category-title">👤 Identity History</div>
+                    <div class="category-question">"Who is this?"</div>
+                    <div class="category-count">5 tools</div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 20%;">Tool Name</th>
+                            <th style="width: 45%;">Description</th>
+                            <th style="width: 12%;">Status</th>
+                            <th style="width: 15%;">Source</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><div class="tool-name">get_email_history</div></td>
+                            <td>
+                                <div class="tool-description">Get transaction history for an email address. Use to detect account patterns, multi-card usage, and synthetic identities.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Synthetic identities, account takeover — one email across many cards or vice versa</div>
+                            </td>
+                            <td><span class="badge active">Active</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">get_device_history</div></td>
+                            <td>
+                                <div class="tool-description">Get all transactions from a specific device fingerprint. Detects device reuse across multiple accounts.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Device reuse across accounts, emulator/virtual machine usage, device spoofing</div>
+                            </td>
+                            <td><span class="badge active">Active</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_email_reputation</div></td>
+                            <td>
+                                <div class="tool-description">Check email reputation: age, provider type (disposable vs corporate), breach history, social media presence.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Disposable emails (Yopmail, Guerrilla), newly created emails, emails found in breach databases</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge external">External API</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_phone_verification</div></td>
+                            <td>
+                                <div class="tool-description">Verify phone number: carrier type (mobile/VOIP/landline), country, whether it matches billing address region.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> VOIP numbers used for synthetic identities, phone-country mismatch with billing address</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge external">External API</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_identity_graph</div></td>
+                            <td>
+                                <div class="tool-description">Build and query identity graph linking email, phone, address, device, and card across all transactions. Finds hidden connections.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Fraud rings, synthetic identity networks, mule accounts sharing devices or addresses</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Card & Velocity -->
+            <div class="category">
+                <div class="category-header">
+                    <div class="category-title">⚡ Card & Velocity</div>
+                    <div class="category-question">"How is the card behaving?"</div>
+                    <div class="category-count">4 tools</div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 20%;">Tool Name</th>
+                            <th style="width: 45%;">Description</th>
+                            <th style="width: 12%;">Status</th>
+                            <th style="width: 15%;">Source</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><div class="tool-name">get_card_history</div></td>
+                            <td>
+                                <div class="tool-description">Get all transactions for a card in the last N hours. Use to detect velocity patterns, amount escalation, and card reuse.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Card reuse patterns, velocity bursts, amount escalation, geographic spread</div>
+                            </td>
+                            <td><span class="badge active">Active</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_velocity</div></td>
+                            <td>
+                                <div class="tool-description">Check how many transactions a card made in a short window. Detects card testing and velocity bursts.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Card testing (rapid small transactions), brute-force BIN attacks, velocity abuse</div>
+                            </td>
+                            <td><span class="badge active">Active</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_bin_lookup</div></td>
+                            <td>
+                                <div class="tool-description">Look up card BIN to get issuing bank, card type (credit/debit/prepaid), issuing country, and card brand.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Prepaid card fraud, issuing country mismatch with billing address, virtual card abuse</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge external">External API</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_card_testing_pattern</div></td>
+                            <td>
+                                <div class="tool-description">Detect card testing patterns: small→large amount escalation, multiple declines followed by success, rapid sequential attempts.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Card testing attacks, BIN brute-forcing, stolen card validation before high-value fraud</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Geographic & Locale -->
+            <div class="category">
+                <div class="category-header">
+                    <div class="category-title">🌍 Geographic & Locale</div>
+                    <div class="category-question">"Where is this coming from?"</div>
+                    <div class="category-count">4 tools</div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 20%;">Tool Name</th>
+                            <th style="width: 45%;">Description</th>
+                            <th style="width: 12%;">Status</th>
+                            <th style="width: 15%;">Source</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><div class="tool-name">check_locale_consistency</div></td>
+                            <td>
+                                <div class="tool-description">Check whether browser locale, billing country, IP country, and card country are consistent. Key signal for geo fraud.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Locale/country mismatches indicating proxy use, stolen cards used from different countries, geo-spoofing</div>
+                            </td>
+                            <td><span class="badge active">Active</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">get_ip_reputation</div></td>
+                            <td>
+                                <div class="tool-description">Check IP address reputation: known proxy/VPN/Tor, datacenter IP, geographic location, historical fraud association.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> VPN/proxy/Tor usage, datacenter IPs (bot traffic), IPs associated with previous fraud</div>
+                            </td>
+                            <td><span class="badge active">Active</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_ip_geolocation</div></td>
+                            <td>
+                                <div class="tool-description">Get precise geolocation for an IP: lat/long, city, region, ISP, connection type, proxy/VPN/Tor detection.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Precise location for travel feasibility checks, ISP-level anomalies, mobile vs residential vs datacenter</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge external">External API</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_travel_feasibility</div></td>
+                            <td>
+                                <div class="tool-description">Check if a human could physically travel between two transaction locations within the time gap. Uses haversine distance and realistic travel speeds.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Impossible travel — e.g., transactions in New York and Tokyo 11 minutes apart</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Address & Shipping -->
+            <div class="category">
+                <div class="category-header">
+                    <div class="category-title">📦 Address & Shipping</div>
+                    <div class="category-question">"Where is it going?"</div>
+                    <div class="category-count">4 tools</div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 20%;">Tool Name</th>
+                            <th style="width: 45%;">Description</th>
+                            <th style="width: 12%;">Status</th>
+                            <th style="width: 15%;">Source</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><div class="tool-name">get_address_history</div></td>
+                            <td>
+                                <div class="tool-description">Find all transactions shipped to a given address. Use to detect address reuse across cards and emails — a key drop address signal.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Drop addresses, reshipping fraud — multiple cards/emails shipping to same location</div>
+                            </td>
+                            <td><span class="badge active">Active</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_avs_result</div></td>
+                            <td>
+                                <div class="tool-description">Check Address Verification Service result for this transaction: full match, partial match (zip only), or mismatch.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Address mismatch with card issuer records, zip-only matches (weaker signal), AVS unavailable (international cards)</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge external">External API</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_address_validation</div></td>
+                            <td>
+                                <div class="tool-description">Validate if an address is real, deliverable, and properly formatted. Detects fake addresses, vacant lots, and PO boxes.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Fake addresses, vacant/condemned buildings, PO box drops, commercial vs residential classification</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge external">External API</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_reshipping_network</div></td>
+                            <td>
+                                <div class="tool-description">Cluster addresses receiving shipments from many different cards/emails. Detect organized reshipping operations.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Reshipping networks, package mule operations, organized fraud rings using shared drop points</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Behavioral & Account -->
+            <div class="category">
+                <div class="category-header">
+                    <div class="category-title">📊 Behavioral & Account</div>
+                    <div class="category-question">"Does the behavior make sense?"</div>
+                    <div class="category-count">4 tools</div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 20%;">Tool Name</th>
+                            <th style="width: 45%;">Description</th>
+                            <th style="width: 12%;">Status</th>
+                            <th style="width: 15%;">Source</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><div class="tool-name">get_refund_history</div></td>
+                            <td>
+                                <div class="tool-description">Get refund history for a customer (by email or card). Detect refund abuse, return fraud, and wardrobing.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Refund abuse, return fraud, wardrobing (buy-use-return), excessive refund rates</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">get_chargeback_history</div></td>
+                            <td>
+                                <div class="tool-description">Get chargeback history for a customer or card. Detect serial chargeback abusers and friendly fraud.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Serial chargeback fraud, friendly fraud, chargeback-to-transaction ratio anomalies</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_account_age</div></td>
+                            <td>
+                                <div class="tool-description">Check account creation date and first transaction date. New accounts with high-value transactions are high risk.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> New account fraud, account creation bots, synthetic identity accounts created just before fraud</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_session_behavior</div></td>
+                            <td>
+                                <div class="tool-description">Analyze user session behavior: time on site, pages visited, mouse movement patterns, form fill speed.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Bot behavior (instant form fill, no mouse movement), scripted attacks, account takeover (different behavior from account owner)</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Merchant & Product -->
+            <div class="category">
+                <div class="category-header">
+                    <div class="category-title">🏪 Merchant & Product</div>
+                    <div class="category-question">"Is this merchant/product risky?"</div>
+                    <div class="category-count">2 tools</div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 20%;">Tool Name</th>
+                            <th style="width: 45%;">Description</th>
+                            <th style="width: 12%;">Status</th>
+                            <th style="width: 15%;">Source</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><div class="tool-name">check_merchant_risk</div></td>
+                            <td>
+                                <div class="tool-description">Check merchant risk profile: category (MCC), historical fraud rate, average transaction value, chargeback ratio.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> High-risk merchant categories, merchants with abnormal fraud rates, merchant compromise indicators</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_merchant_fraud_rate</div></td>
+                            <td>
+                                <div class="tool-description">Calculate real-time fraud rate for a merchant: fraud count / total transactions over a rolling window.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Merchant under attack (sudden fraud rate spike), compromised merchant, merchant collusion</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge builtin">Built-in</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- External Intelligence -->
+            <div class="category">
+                <div class="category-header">
+                    <div class="category-title">🔍 External Intelligence</div>
+                    <div class="category-question">"What do external sources say?"</div>
+                    <div class="category-count">4 tools</div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 20%;">Tool Name</th>
+                            <th style="width: 45%;">Description</th>
+                            <th style="width: 12%;">Status</th>
+                            <th style="width: 15%;">Source</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><div class="tool-name">check_sanctions_list</div></td>
+                            <td>
+                                <div class="tool-description">Screen customer name and address against sanctions lists (OFAC SDN, EU, UN, UK). Required for AML compliance.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Sanctioned individuals, sanctioned countries, sanctioned entities attempting transactions</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge external">External API</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_adverse_media</div></td>
+                            <td>
+                                <div class="tool-description">Screen customer against adverse media databases: fraud convictions, financial crime, money laundering, terrorism financing.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Known fraudsters, individuals with financial crime history, entities linked to money laundering</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge external">External API</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_pep_status</div></td>
+                            <td>
+                                <div class="tool-description">Check if customer is a Politically Exposed Person (PEP) or related to one. Triggers enhanced due diligence.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> PEPs requiring enhanced monitoring, family members and close associates of PEPs</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge external">External API</span></td>
+                        </tr>
+                        <tr>
+                            <td><div class="tool-name">check_breach_exposure</div></td>
+                            <td>
+                                <div class="tool-description">Check if customer email or credentials appear in known data breaches. Breached credentials increase account takeover risk.</div>
+                                <div class="tool-detects"><strong>Detects:</strong> Compromised credentials, credentials available on dark web, accounts at high risk of takeover</div>
+                            </td>
+                            <td><span class="badge candidate">Candidate</span></td>
+                            <td><span class="badge external">External API</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p><strong>PaymentLab</strong> — Open-source fraud investigation toolkit<br>
+        <a href="https://github.com/huiliking/PaymentLab" target="_blank">View on GitHub</a></p>
+    </div>
+</body>
+</html>
