@@ -14,17 +14,11 @@ Architecture:
     3. ANALYZE — assess gathered evidence, decide if more investigation needed
     4. REPORT — produce evidence-backed verdict with confidence score
 
-Tool functions available to the agent:
-  - get_transaction_details(txn_id)
-  - get_card_history(card_last4, hours=24)
-  - get_address_history(address)
-  - get_email_history(email)
-  - check_locale_consistency(txn_id)
-  - check_velocity(card_last4, hours=2)
-  - get_ip_reputation(ip_country)
-  - get_device_history(device_fingerprint)
+Tool definitions are loaded from registry.json via ToolRegistry.
+Adding a new tool = one .py method + one registry.json entry. No changes to
+the investigation loop.
 
-The agent runs on Ollama (llama3.2:1b or 3b) locally.
+The agent runs on Claude API (claude-sonnet-4-5) with Ollama fallback.
 """
 
 import sqlite3
@@ -41,6 +35,11 @@ try:
     ANTHROPIC_AVAILABLE = True
 except ImportError:
     ANTHROPIC_AVAILABLE = False
+
+try:
+    from tool_registry import ToolRegistry
+except ModuleNotFoundError:
+    from ai_agents.tool_registry import ToolRegistry
 
 
 # ── Data classes ────────────────────────────────────────────────────────────
@@ -340,51 +339,10 @@ class InvestigationTools:
             "risk": risk
         }
 
-    # Tool registry for LLM dispatch
-    TOOL_REGISTRY = {
-        "get_transaction_details": {
-            "description": "Get full details of a specific transaction",
-            "params": ["txn_id"]
-        },
-        "get_card_history": {
-            "description": "Get all transactions for a card in the last N hours",
-            "params": ["card_last4", "hours"]
-        },
-        "get_address_history": {
-            "description": "Find all transactions shipped to an address",
-            "params": ["address"]
-        },
-        "get_email_history": {
-            "description": "Get transaction history for an email address",
-            "params": ["email"]
-        },
-        "check_locale_consistency": {
-            "description": "Check if browser locale, billing, IP, and card country match",
-            "params": ["txn_id"]
-        },
-        "check_velocity": {
-            "description": "Check transaction velocity/frequency for a card",
-            "params": ["card_last4", "hours"]
-        },
-        "get_ip_reputation": {
-            "description": "Check risk level of the IP country",
-            "params": ["ip_country"]
-        },
-        "get_device_history": {
-            "description": "Check how many cards/emails used this device",
-            "params": ["device_fingerprint"]
-        },
-    }
-    
-    def execute_tool(self, tool_name, params):
-        """Dispatch tool call from LLM"""
-        method = getattr(self, tool_name, None)
-        if not method:
-            return {"error": f"Unknown tool: {tool_name}"}
-        try:
-            return method(**params)
-        except Exception as e:
-            return {"error": f"Tool error: {str(e)}"}
+    # NOTE: TOOL_REGISTRY dict and execute_tool() method removed.
+    # Tool schemas and dispatch are now handled by ToolRegistry (tool_registry.py).
+    # The actual tool methods above (get_transaction_details, get_card_history, etc.)
+    # remain here — ToolRegistry.execute() calls them via getattr().
 
 
 # ── Rule-based pre-screen ──────────────────────────────────────────────────
@@ -491,26 +449,71 @@ class FraudInvestigator:
     """
     
     def __init__(self, db_path="payment_lab.db", ollama_url="http://localhost:11434", 
-                 model="llama3.2", max_steps=6):
+                 model="llama3.2", max_steps=6, registry_path=None, backend="ollama"):
+        """
+        Args:
+            backend: "auto" (Claude if key exists, else Ollama),
+                     "ollama" (force Ollama even if key exists),
+                     "claude" (force Claude, error if no key)
+        """
+        print(f"\n  {'='*55}")
+        print(f"  FRAUD INVESTIGATOR — BOOT SEQUENCE")
+        print(f"  {'='*55}")
+
+        # Phase 1: Database + tools
         self.tools = InvestigationTools(db_path)
         self.rule_engine = RuleEngine(db_path)
         self.ollama_url = ollama_url
         self.model = model
         self.max_steps = max_steps
         self.db_path = db_path
+        print(f"  [BOOT 1/3] Database: {db_path}")
 
-        # Load Anthropic key from environment — never hardcoded
+        # Phase 2: Tool registry
+        if registry_path is None:
+            # Look for registry.json relative to this file's directory
+            registry_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "registry.json")
+            if not os.path.exists(registry_path):
+                # Fallback: same directory as this file
+                registry_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "registry.json")
+        self.registry = ToolRegistry(registry_path)
+        active_tools = self.registry.get_active_tools()
+        print(f"  [BOOT 2/3] Registry: {registry_path}")
+        print(f"             {self.registry}")
+        print(f"             Active tools: {', '.join(t['name'] for t in active_tools)}")
+
+        # Phase 3: Backend selection
         api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if api_key and ANTHROPIC_AVAILABLE:
-            print(f"  [AGENT] ANTHROPIC_API_KEY loaded: {api_key[:16]}...{api_key[-4:]}")
-            self.claude = anthropic_sdk.Anthropic(api_key=api_key)
-            self.use_claude = True
-            print(f"  [AGENT] Backend: Claude API (claude-sonnet-4-5)")
-        else:
+        
+        if backend == "ollama":
+            # Force Ollama regardless of API key
             self.claude = None
             self.use_claude = False
-            reason = "anthropic package not installed" if not ANTHROPIC_AVAILABLE else "ANTHROPIC_API_KEY not set"
-            print(f"  [AGENT] Backend: Ollama ({model}) — {reason}")
+            print(f"  [BOOT 3/3] Backend: Ollama ({model}) — forced via --backend=ollama")
+        elif backend == "claude":
+            # Force Claude — error if no key
+            if not ANTHROPIC_AVAILABLE:
+                raise RuntimeError("--backend=claude requires: pip install anthropic")
+            if not api_key:
+                raise RuntimeError("--backend=claude requires ANTHROPIC_API_KEY environment variable")
+            self.claude = anthropic_sdk.Anthropic(api_key=api_key)
+            self.use_claude = True
+            print(f"  [BOOT 3/3] Backend: Claude API ({self.CLAUDE_MODEL}) — forced via --backend=claude")
+            print(f"             API key: {api_key[:12]}...{api_key[-4:]}")
+        else:
+            # Auto: Claude if key exists, else Ollama
+            if api_key and ANTHROPIC_AVAILABLE:
+                self.claude = anthropic_sdk.Anthropic(api_key=api_key)
+                self.use_claude = True
+                print(f"  [BOOT 3/3] Backend: Claude API ({self.CLAUDE_MODEL}) — auto-detected API key")
+                print(f"             API key: {api_key[:12]}...{api_key[-4:]}")
+            else:
+                self.claude = None
+                self.use_claude = False
+                reason = "anthropic package not installed" if not ANTHROPIC_AVAILABLE else "ANTHROPIC_API_KEY not set"
+                print(f"  [BOOT 3/3] Backend: Ollama ({model}) — {reason}")
+
+        print(f"  {'='*55}\n")
     
     def investigate(self, txn_id):
         """
@@ -550,19 +553,33 @@ class FraudInvestigator:
 
         # Build shared investigation context
         txn_details = self.tools.get_transaction_details(txn_id)
+        txn = txn_details.get("result", {})
         context = {
-            "transaction": txn_details.get("result", {}),
+            "transaction": txn,
             "pre_screen_triggers": triggers,
             "evidence_gathered": [],
             "tools_called": []
         }
 
-        # Phase 1-N: LLM investigation loop — Claude API or Ollama
+        if not txn:
+            print(f"  [!] Transaction not found in database")
+            report.risk_level = "ERROR"
+            report.verdict = "ERROR"
+            report.summary = f"Transaction {txn_id} not found."
+            return report
+
+        print(f"\n  [CONTEXT] Card: ****{txn.get('card_last4')}  Amount: {txn.get('amount_cents')} {txn.get('currency')}")
+        print(f"  [CONTEXT] Email: {txn.get('customer_email')}  IP: {txn.get('ip_country')}  Billing: {txn.get('billing_country')}")
+
+        # Phase 1-N: LLM investigation loop
+        backend_name = "Claude API" if self.use_claude else f"Ollama ({self.model})"
+        schemas = self.registry.get_schemas()
+        print(f"\n[PHASE 1] Starting {backend_name} investigation (FAA Plan→Gather→Analyze)")
+        print(f"  [REGISTRY] {len(schemas)} active tools loaded: {', '.join(s['name'] for s in schemas)}")
+
         if self.use_claude:
-            print(f"\n[PHASE 1] Starting Claude investigation (FAA Plan→Gather→Analyze)...")
             self._claude_investigate(context, report)
         else:
-            print(f"\n[PHASE 1] Starting Ollama investigation...")
             self._ollama_investigate(context, report)
         
         # Save report to DB
@@ -616,7 +633,14 @@ class FraudInvestigator:
 
             consecutive_skips = 0
             print(f"  [GATHER] Calling {tool_name}({tool_params})")
-            tool_result = self.tools.execute_tool(tool_name, tool_params)
+            print(f"  [REGISTRY] Dispatching → registry.execute('{tool_name}', ..., tools_instance)")
+            tool_result = self.registry.execute(tool_name, tool_params, self.tools)
+
+            if "error" in tool_result:
+                print(f"  [REGISTRY] ✗ Error: {tool_result['error']}")
+            else:
+                result_keys = [k for k in tool_result.keys() if k != 'tool']
+                print(f"  [REGISTRY] ✓ Result keys: {', '.join(result_keys)}")
 
             context["tools_called"].append(tool_name)
             context["evidence_gathered"].append({
@@ -649,87 +673,9 @@ class FraudInvestigator:
 
     # ── Claude API Investigation (FAA Plan→Gather→Analyze) ─────────────────
 
-    # Claude tool schemas — map the 8 InvestigationTools functions
-    CLAUDE_TOOLS = [
-        {
-            "name": "get_transaction_details",
-            "description": "Get full details of a specific transaction",
-            "input_schema": {
-                "type": "object",
-                "properties": {"txn_id": {"type": "string", "description": "Transaction ID"}},
-                "required": ["txn_id"]
-            }
-        },
-        {
-            "name": "get_card_history",
-            "description": "Get all transactions for a card in the last N hours. Use to detect velocity patterns.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "card_last4": {"type": "string", "description": "Last 4 digits of card"},
-                    "hours": {"type": "integer", "description": "Time window in hours", "default": 24}
-                },
-                "required": ["card_last4"]
-            }
-        },
-        {
-            "name": "get_address_history",
-            "description": "Find all transactions shipped to a given address. Use to detect address reuse across cards.",
-            "input_schema": {
-                "type": "object",
-                "properties": {"address": {"type": "string", "description": "Shipping address to look up"}},
-                "required": ["address"]
-            }
-        },
-        {
-            "name": "get_email_history",
-            "description": "Get transaction history for an email address. Use to detect account patterns.",
-            "input_schema": {
-                "type": "object",
-                "properties": {"email": {"type": "string", "description": "Customer email address"}},
-                "required": ["email"]
-            }
-        },
-        {
-            "name": "check_locale_consistency",
-            "description": "Check whether browser locale, billing country, IP country, and card country are consistent. Key signal for geo fraud.",
-            "input_schema": {
-                "type": "object",
-                "properties": {"txn_id": {"type": "string", "description": "Transaction ID"}},
-                "required": ["txn_id"]
-            }
-        },
-        {
-            "name": "check_velocity",
-            "description": "Check how many transactions this card made in a short window. Detects card testing and velocity bursts.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "card_last4": {"type": "string", "description": "Last 4 digits of card"},
-                    "hours": {"type": "integer", "description": "Time window in hours", "default": 2}
-                },
-                "required": ["card_last4"]
-            }
-        },
-        {
-            "name": "get_ip_reputation",
-            "description": "Check the risk level of the IP country.",
-            "input_schema": {
-                "type": "object",
-                "properties": {"ip_country": {"type": "string", "description": "Two-letter country code of IP"}},
-                "required": ["ip_country"]
-            }
-        },
-        {
-            "name": "get_device_history",
-            "description": "Check how many cards and emails have used this device fingerprint.",
-            "input_schema": {
-                "type": "object",
-                "properties": {"device_fingerprint": {"type": "string", "description": "Device fingerprint string"}},
-                "required": ["device_fingerprint"]
-            }
-        },
-    ]
+    # NOTE: CLAUDE_TOOLS list removed. Schemas are now loaded from registry.json
+    # via self.registry.get_schemas(). To add a new tool, add it to registry.json
+    # and implement the method in InvestigationTools — no changes needed here.
 
     CLAUDE_MODEL = "claude-sonnet-4-5"
 
@@ -796,7 +742,7 @@ class FraudInvestigator:
                     model=self.CLAUDE_MODEL,
                     max_tokens=1024,
                     system=system_prompt,
-                    tools=self.CLAUDE_TOOLS,
+                    tools=self.registry.get_schemas(),  # ← loaded from registry.json
                     messages=messages
                 )
             except Exception as e:
@@ -871,9 +817,16 @@ class FraudInvestigator:
 
                 print(f"  [GATHER] Tool: {tool_name}")
                 print(f"  [GATHER] Params: {json.dumps(tool_input, default=str)}")
+                print(f"  [REGISTRY] Dispatching → registry.execute('{tool_name}', ..., tools_instance)")
 
-                tool_result = self.tools.execute_tool(tool_name, tool_input)
+                tool_result = self.registry.execute(tool_name, tool_input, self.tools)
                 result_str = json.dumps(tool_result, default=str)
+
+                if "error" in tool_result:
+                    print(f"  [REGISTRY] ✗ Error: {tool_result['error']}")
+                else:
+                    result_keys = [k for k in tool_result.keys() if k != 'tool']
+                    print(f"  [REGISTRY] ✓ Result keys: {', '.join(result_keys)}")
                 print(f"  [GATHER] Result: {result_str[:400]}")
 
                 context["tools_called"].append(tool_name)
@@ -938,10 +891,10 @@ class FraudInvestigator:
     def _llm_plan(self, context, iteration):
         """Ask LLM to plan next investigation step"""
         
-        # Build available tools description
+        # Build available tools description from registry
         tool_desc = "\n".join([
-            f"- {name}: {info['description']} (params: {', '.join(info['params'])})"
-            for name, info in InvestigationTools.TOOL_REGISTRY.items()
+            f"- {t['name']}: {t['description']} (params: {', '.join(t['input_schema'].get('required', []))})"
+            for t in self.registry.get_schemas()
         ])
         
         # Build evidence summary — keep short to avoid timeouts on later iterations
@@ -1069,7 +1022,7 @@ PARAMS: none"""
         txn = context["transaction"]
         tool = plan["tool"]
         
-        if tool in InvestigationTools.TOOL_REGISTRY:
+        if self.registry.get_tool(tool):
             if tool == "check_locale_consistency":
                 params = {"txn_id": txn.get("id")}
             elif tool == "check_velocity":
@@ -1392,6 +1345,9 @@ if __name__ == "__main__":
     parser.add_argument("--list", action="store_true", help="List flagged transactions")
     parser.add_argument("--model", default="llama3.2", help="Ollama model name")
     parser.add_argument("--ollama", default="http://localhost:11434", help="Ollama URL")
+    parser.add_argument("--registry", default=None, help="Path to registry.json (default: auto-detect)")
+    parser.add_argument("--backend", default="auto", choices=["auto", "ollama", "claude"],
+                        help="LLM backend: 'ollama' (force local), 'claude' (force API), 'auto' (Claude if key set)")
     parser.add_argument("--investigate-all", action="store_true", help="Investigate all flagged transactions")
     args = parser.parse_args()
     
@@ -1410,7 +1366,9 @@ if __name__ == "__main__":
         investigator = FraudInvestigator(
             db_path=args.db,
             ollama_url=args.ollama,
-            model=args.model
+            model=args.model,
+            registry_path=args.registry,
+            backend=args.backend
         )
         report = investigator.investigate(args.txn)
     
@@ -1419,7 +1377,9 @@ if __name__ == "__main__":
         investigator = FraudInvestigator(
             db_path=args.db,
             ollama_url=args.ollama,
-            model=args.model
+            model=args.model,
+            registry_path=args.registry,
+            backend=args.backend
         )
         
         print(f"\nInvestigating {len(flagged)} flagged transactions...\n")

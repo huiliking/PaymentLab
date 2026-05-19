@@ -6,6 +6,7 @@ import ProductsPage from './pages/ProductsPage'
 import CheckoutPage from './pages/CheckoutPage'
 import ConfirmationPage from './pages/ConfirmationPage'
 import FraudDashboard from './pages/FraudDashboard'
+import ToolDashboard from './pages/ToolDashboard'
 
 export default function App() {
   const [stripePromise, setStripePromise] = useState(null)
@@ -113,6 +114,15 @@ export default function App() {
             Fraud Lab
           </Link>
 
+          <Link to="/tools" style={{
+            textDecoration: 'none',
+            color: 'var(--ink-muted)',
+            fontSize: '0.9rem',
+            fontWeight: 500,
+          }}>
+            Tools
+          </Link>
+
           <Link to="/checkout" style={{
             textDecoration: 'none',
             display: 'flex',
@@ -163,6 +173,9 @@ export default function App() {
           } />
           <Route path="/fraud" element={
             <FraudDashboard />
+          } />
+          <Route path="/tools" element={
+            <ToolDashboard />
           } />
         </Routes>
       </div>

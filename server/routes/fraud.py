@@ -21,6 +21,7 @@ from ai_agents.fraud_investigator import (
     RuleEngine,
     list_flagged_transactions
 )
+from ai_agents.tool_registry import ToolRegistry
 
 fraud_bp = Blueprint('fraud', __name__)
 
@@ -31,6 +32,17 @@ DB_PATH = os.environ.get(
 )
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
+
+# Tool registry — shared instance, loaded once
+REGISTRY_PATH = os.environ.get(
+    "TOOL_REGISTRY_PATH",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ai_agents", "tools", "registry.json")
+)
+# Fallback: check ai_agents/ directory directly
+if not os.path.exists(REGISTRY_PATH):
+    REGISTRY_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ai_agents", "registry.json")
+
+tool_registry = ToolRegistry(REGISTRY_PATH)
 
 
 @fraud_bp.route('/fraud/transactions', methods=['GET'])
@@ -91,7 +103,8 @@ def investigate_transaction(txn_id):
     investigator = FraudInvestigator(
         db_path=DB_PATH,
         ollama_url=OLLAMA_URL,
-        model=OLLAMA_MODEL
+        model=OLLAMA_MODEL,
+        registry_path=REGISTRY_PATH
     )
     
     try:
@@ -216,3 +229,44 @@ def get_stats():
         "total_investigations": total_reports,
         "verdict_breakdown": verdict_breakdown
     })
+
+
+# ── Tool Registry Endpoints ───────────────────────────────────────────────
+
+@fraud_bp.route('/fraud/tools', methods=['GET'])
+def get_tools():
+    """
+    Full tool registry for the dashboard.
+    Returns categories, tools (with status/source/references), and statistics.
+
+    Optional query params:
+        ?category=card_velocity    — filter by category
+        ?status=active             — filter by status (active, candidate, proposed)
+    """
+    category = request.args.get('category')
+    status = request.args.get('status')
+
+    if category or status:
+        return jsonify({
+            "tools": tool_registry.list_tools(category=category, status=status),
+            "categories": tool_registry.list_categories(),
+            "statistics": tool_registry.get_statistics(),
+        })
+
+    # No filters — return full dashboard payload
+    return jsonify(tool_registry.to_dashboard_payload())
+
+
+@fraud_bp.route('/fraud/tools/<tool_name>', methods=['GET'])
+def get_tool_detail(tool_name):
+    """Get details for a single tool by name"""
+    tool = tool_registry.get_tool(tool_name)
+    if not tool:
+        return jsonify({"error": f"Tool '{tool_name}' not found"}), 404
+
+    # Include the category metadata alongside the tool
+    category = next(
+        (c for c in tool_registry.list_categories() if c["id"] == tool["category"]),
+        None
+    )
+    return jsonify({"tool": tool, "category": category})
