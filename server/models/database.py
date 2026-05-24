@@ -83,9 +83,15 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_txn_email ON transactions(customer_email);
         CREATE INDEX IF NOT EXISTS idx_txn_status ON transactions(status);
     """)
-    conn.commit()
-    conn.close()
-    print("[DB] Initialized payment_lab.db")
+    count = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+    if count == 0:
+        conn.close()
+        from seed_transactions import seed_database
+        seed_database(DB_PATH)
+        print("[DB] Auto-seeded transaction data")
+    else:
+        conn.close()
+        print("[DB] Initialized payment_lab.db")
 
 
 def create_order(payment_intent_id, amount, currency, customer_email,
