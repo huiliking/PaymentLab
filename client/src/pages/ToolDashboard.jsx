@@ -14,7 +14,7 @@ const ToolDashboard = () => {
 
   const fetchRegistry = async () => {
     try {
-      const response = await fetch('http://localhost:5000/api/fraud/tools');
+      const response = await fetch('/api/fraud/tools');
       if (!response.ok) throw new Error('Failed to fetch registry');
       const data = await response.json();
       setRegistry(data);

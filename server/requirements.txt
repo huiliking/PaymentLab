@@ -5,3 +5,4 @@ anthropic>=0.40.0
 python-dotenv==1.1.0
 babel==2.17.0
 requests==2.32.3
+gunicorn>=21.2.0
