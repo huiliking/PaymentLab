@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import IdentityGraphPanel from "./IdentityGraphPanel";
 
 /**
  * FraudDashboard.jsx
@@ -290,6 +291,22 @@ function ReportPanel({ report, onClose }) {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Identity Graph — only rendered when check_identity_graph was called */}
+        {report.tool_results?.check_identity_graph && (
+          <div style={{ marginTop: 24 }}>
+            <h3 style={{
+              fontSize: 14, fontWeight: 600, margin: "0 0 10px",
+              fontFamily: "'JetBrains Mono', monospace", color: "var(--text-primary)",
+            }}>
+              Identity Graph
+            </h3>
+            <IdentityGraphPanel
+              graphData={report.tool_results.check_identity_graph}
+              compact={false}
+            />
           </div>
         )}
       </div>

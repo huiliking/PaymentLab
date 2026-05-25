@@ -20,7 +20,7 @@ the investigation loop.
 
 The agent runs on Claude API (claude-sonnet-4-5) with Ollama fallback.
 """
-
+from .identity_graph import IdentityGraphBuilder
 import sqlite3
 import json
 import re
@@ -71,7 +71,8 @@ class InvestigationReport:
     evidence: list = field(default_factory=list)
     steps: list = field(default_factory=list)
     created_at: str = ""
-    
+    tool_results: dict = field(default_factory=dict)   # keyed by tool name, stores raw results
+
     def to_dict(self):
         return {
             "transaction_id": self.transaction_id,
@@ -81,7 +82,8 @@ class InvestigationReport:
             "summary": self.summary,
             "evidence": [asdict(e) if isinstance(e, Evidence) else e for e in self.evidence],
             "steps": [asdict(s) if isinstance(s, InvestigationStep) else s for s in self.steps],
-            "created_at": self.created_at
+            "created_at": self.created_at,
+            "tool_results": self.tool_results,
         }
 
 
@@ -338,6 +340,55 @@ class InvestigationTools:
             "emails": unique_emails,
             "risk": risk
         }
+    
+    def check_identity_graph(self, transaction_id: str, hops: int = 2) -> dict:
+        """
+        Build an entity relationship graph around the transaction and detect
+        fraud rings or synthetic identity clusters.
+
+        Args:
+            transaction_id: The transaction to investigate
+            hops: Graph traversal depth (1 or 2, default 2)
+
+        Returns:
+            dict with graph structure, cluster stats, risk score, and summary
+        """
+        db_path = getattr(self, "db_path", None) or os.environ.get(
+            "PAYMENTLAB_DB", "server/database/transactions.db"
+        )
+
+        builder = IdentityGraphBuilder(db_path=db_path)
+        builder.MAX_HOPS = max(1, min(hops, 2))  # cap at 2 for performance
+
+        result = builder.build(transaction_id)
+
+        return {
+            "transaction_id": result.transaction_id,
+            "seed_entities": result.seed_entities,
+            "graph": {
+                "node_count": len(result.nodes),
+                "edge_count": len(result.edges),
+                "nodes": result.nodes,
+                "edges": result.edges,
+            },
+            "cluster": {
+                "size": result.cluster_size,
+                "shared_emails": result.shared_email_count,
+                "shared_addresses": result.shared_address_count,
+                "shared_ips": result.shared_ip_count,
+                "shared_devices": result.shared_device_count,
+                "known_fraud_neighbors": result.known_fraud_neighbors,
+                "max_entity_reuse": result.max_card_reuse,
+            },
+            "risk": {
+                "score": result.risk_score,
+                "label": result.risk_label,
+                "fraud_ring_detected": result.fraud_ring_detected,
+                "synthetic_identity_signals": result.synthetic_identity_signals,
+            },
+            "summary": result.summary,
+        }
+
 
     # NOTE: TOOL_REGISTRY dict and execute_tool() method removed.
     # Tool schemas and dispatch are now handled by ToolRegistry (tool_registry.py).
@@ -642,6 +693,9 @@ class FraudInvestigator:
                 result_keys = [k for k in tool_result.keys() if k != 'tool']
                 print(f"  [REGISTRY] ✓ Result keys: {', '.join(result_keys)}")
 
+            # Store raw result so Flask/React can access it (e.g. graph data for IdentityGraphPanel)
+            report.tool_results[tool_name] = tool_result
+
             context["tools_called"].append(tool_name)
             context["evidence_gathered"].append({
                 "tool": tool_name, "params": tool_params, "result": tool_result
@@ -658,6 +712,39 @@ class FraudInvestigator:
             if evidence:
                 report.evidence.append(evidence)
                 print(f"  [EVIDENCE] {evidence.risk_signal}: {evidence.finding}")
+
+            # ── Deterministic escalation ────────────────────────────────────
+            # Ollama is too small to reliably decide when to use the graph tool.
+            # When address_history reveals high card reuse, auto-trigger the graph.
+            if (tool_name == "get_address_history"
+                    and tool_result.get("unique_cards", 0) >= 5
+                    and "check_identity_graph" not in context["tools_called"]):
+                txn_id = context["transaction"].get("id", "")
+                print(f"  [ESCALATE] Address reused by {tool_result['unique_cards']} cards "
+                      f"→ auto-calling check_identity_graph")
+                graph_result = self.registry.execute(
+                    "check_identity_graph", {"transaction_id": txn_id}, self.tools
+                )
+                report.tool_results["check_identity_graph"] = graph_result
+                context["tools_called"].append("check_identity_graph")
+                context["evidence_gathered"].append({
+                    "tool": "check_identity_graph",
+                    "params": {"transaction_id": txn_id},
+                    "result": graph_result
+                })
+                step_count += 1
+                print(f"\n  --- Iteration {step_count} (auto-escalation) ---")
+                report.steps.append(InvestigationStep(
+                    step_number=step_count, phase="GATHER",
+                    action=f"Auto-escalated to check_identity_graph (address shared by "
+                           f"{tool_result['unique_cards']} cards)",
+                    result=json.dumps(graph_result, default=str)[:500],
+                    tool_used="check_identity_graph"
+                ))
+                graph_evidence = self._extract_evidence("check_identity_graph", graph_result)
+                if graph_evidence:
+                    report.evidence.append(graph_evidence)
+                    print(f"  [EVIDENCE] {graph_evidence.risk_signal}: {graph_evidence.finding}")
 
         print(f"\n[FINAL] Generating Ollama verdict...")
         verdict = self._llm_verdict(context)
@@ -828,6 +915,9 @@ class FraudInvestigator:
                     result_keys = [k for k in tool_result.keys() if k != 'tool']
                     print(f"  [REGISTRY] ✓ Result keys: {', '.join(result_keys)}")
                 print(f"  [GATHER] Result: {result_str[:400]}")
+
+                # Store raw result so Flask/React can access it (e.g. graph data for IdentityGraphPanel)
+                report.tool_results[tool_name] = tool_result
 
                 context["tools_called"].append(tool_name)
                 context["evidence_gathered"].append({
@@ -1153,7 +1243,28 @@ PARAMS: none"""
                 risk_signal="LOW",
                 details=result
             )
-        
+
+        elif tool_name == "check_identity_graph":
+            risk_info = result.get("risk", {})
+            cluster = result.get("cluster", {})
+            label = risk_info.get("label", "LOW")
+            fraud_ring = risk_info.get("fraud_ring_detected", False)
+            cluster_size = cluster.get("size", 0)
+            fraud_neighbors = cluster.get("known_fraud_neighbors", 0)
+            signals = risk_info.get("synthetic_identity_signals", [])
+            finding = (
+                f"Identity graph: {cluster_size} cards in cluster, "
+                f"{fraud_neighbors} with fraud verdicts"
+                + (", fraud ring detected" if fraud_ring else "")
+                + (f" — {signals[0]}" if signals else "")
+            )
+            return Evidence(
+                source=tool_name,
+                finding=finding,
+                risk_signal="CRITICAL" if fraud_ring else label,
+                details=result
+            )
+
         return None
     
     def _llm_verdict(self, context):
@@ -1170,13 +1281,23 @@ PARAMS: none"""
         evidence_text = ""
         for e in context["evidence_gathered"]:
             result = e["result"]
-            risk = result.get("risk", "?")
-            # Summarize key findings
-            summary_parts = []
-            for key in ["mismatches", "transaction_count", "unique_cards", "note", "count", "failed_count"]:
-                if key in result:
-                    summary_parts.append(f"{key}: {result[key]}")
-            evidence_text += f"\n  [{risk}] {e['tool']}: {', '.join(summary_parts) if summary_parts else json.dumps(result, default=str)[:200]}"
+            tool = e["tool"]
+            # Graph tool has nested risk dict; all others have flat "risk" string
+            if tool == "check_identity_graph":
+                risk = result.get("risk", {}).get("label", "?")
+                cluster = result.get("cluster", {})
+                summary_parts = [
+                    f"cluster_size: {cluster.get('size', 0)}",
+                    f"fraud_neighbors: {cluster.get('known_fraud_neighbors', 0)}",
+                    f"fraud_ring: {result.get('risk', {}).get('fraud_ring_detected', False)}",
+                ]
+            else:
+                risk = result.get("risk", "?")
+                summary_parts = []
+                for key in ["mismatches", "transaction_count", "unique_cards", "note", "count", "failed_count"]:
+                    if key in result:
+                        summary_parts.append(f"{key}: {result[key]}")
+            evidence_text += f"\n  [{risk}] {tool}: {', '.join(summary_parts) if summary_parts else json.dumps(result, default=str)[:200]}"
         
         triggers_text = ", ".join([f"[{t['risk']}] {t['rule']}" for t in context["pre_screen_triggers"]])
         

@@ -264,40 +264,53 @@
     {
       "name": "check_identity_graph",
       "category": "identity_history",
-      "status": "candidate",
+      "status": "active",
       "source": "builtin",
-      "description": "Build and query identity graph linking email, phone, address, device, and card across all transactions. Finds hidden connections.",
-      "detects": "Fraud rings, synthetic identity networks, mule accounts sharing devices or addresses",
+      "description": "Build an entity relationship graph around the transaction and detect fraud rings or synthetic identity clusters by traversing shared emails, cards, addresses, IPs, and devices.",
+      "detects": [
+        "fraud rings (shared drop addresses across many cards)",
+        "synthetic identity networks (farmed accounts with linked emails/devices)",
+        "botnet / proxy clusters (many cards sharing same IP block)",
+        "device pooling (emulator farms reusing device fingerprints)",
+        "account takeover clusters (compromised account groups)"
+      ],
       "input_schema": {
         "type": "object",
         "properties": {
-          "entity_type": {
+          "transaction_id": {
             "type": "string",
-            "enum": ["email", "phone", "address", "device", "card"],
-            "description": "Type of entity to start the graph traversal from"
+            "description": "The transaction ID to investigate (prefix match supported)"
           },
-          "entity_value": {
-            "type": "string",
-            "description": "Value of the entity (e.g., the email address or device ID)"
-          },
-          "depth": {
+          "hops": {
             "type": "integer",
-            "description": "How many hops to traverse in the graph",
-            "default": 2
+            "description": "Graph traversal depth: 1 = direct neighbors only, 2 = neighbors of neighbors (default). Use 2 for fraud ring detection.",
+            "default": 2,
+            "minimum": 1,
+            "maximum": 2
           }
         },
-        "required": ["entity_type", "entity_value"]
+        "required": ["transaction_id"]
       },
       "references": [
         {
-          "name": "Luo et al. — LLM+GCN Fraud Detection",
+          "label": "Luo et al. — LLM+GCN Fraud Detection",
           "url": "https://arxiv.org/abs/2509.09928",
-          "relevance": "Graph-based transaction relationship analysis is the core of fraud ring detection"
+          "note": "Key insight: fraud signals emerge from relationships, not just individual features. GCN aggregates neighborhood embeddings; we approximate with BFS traversal + cluster scoring."
         },
         {
-          "name": "Flagright — Graph-based AML",
-          "url": "https://www.flagright.com/",
-          "relevance": "Commercial implementation of identity graph traversal for fraud and AML"
+          "label": "FAA Framework — Plan→Gather→Analyze",
+          "url": "https://arxiv.org/abs/2506.11635",
+          "note": "Graph tool fits into the Gather phase; Claude reasons over the graph structure in the Analyze phase."
+        },
+        {
+          "label": "EBA/ECB 2025 Joint Report",
+          "url": "https://www.eba.europa.eu",
+          "note": "Synthetic identity fraud is fastest-growing vector; graph-based detection is recommended approach."
+        },
+        {
+          "label": "Investigation 1 — Shibuya Drop Address",
+          "url": "internal",
+          "note": "1-2-3 Shibuya address shared by 14 cards + 10 emails — exact pattern this tool is designed to catch."
         }
       ]
     },
