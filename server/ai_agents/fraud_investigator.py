@@ -25,6 +25,7 @@ import sqlite3
 import json
 import re
 import os
+import uuid
 import requests
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field, asdict
@@ -500,12 +501,14 @@ class FraudInvestigator:
     """
     
     def __init__(self, db_path="payment_lab.db", ollama_url="http://localhost:11434", 
-                 model="llama3.2", max_steps=6, registry_path=None, backend="ollama"):
+                 model="llama3.2", max_steps=6, registry_path=None, backend="ollama",
+                 metering_service=None):
         """
         Args:
             backend: "auto" (Claude if key exists, else Ollama),
                      "ollama" (force Ollama even if key exists),
                      "claude" (force Claude, error if no key)
+            metering_service: MeteringService instance for usage tracking (optional)
         """
         print(f"\n  {'='*55}")
         print(f"  FRAUD INVESTIGATOR — BOOT SEQUENCE")
@@ -518,6 +521,7 @@ class FraudInvestigator:
         self.model = model
         self.max_steps = max_steps
         self.db_path = db_path
+        self.meter = metering_service
         print(f"  [BOOT 1/3] Database: {db_path}")
 
         # Phase 2: Tool registry
@@ -575,6 +579,10 @@ class FraudInvestigator:
             transaction_id=txn_id,
             created_at=datetime.now().isoformat() + "Z"
         )
+
+        # Metering: one session per investigation
+        self._session_id = str(uuid.uuid4())
+        self._customer_id = "demo_merchant"  # TODO: thread real customer ID from API route
         
         print(f"\n{'='*60}")
         print(f"FRAUD INVESTIGATION: {txn_id}")
@@ -848,6 +856,22 @@ class FraudInvestigator:
                   f"| Running total: input={total_input_tokens}, output={total_output_tokens}")
             print(f"  [PLAN]   stop_reason={response.stop_reason}")
 
+            # Meter this turn
+            if self.meter:
+                tool_names = [b.name for b in response.content if hasattr(b, 'type') and b.type == 'tool_use']
+                self.meter.record(
+                    response=response,
+                    provider="claude",
+                    customer_id=self._customer_id,
+                    event_type="fraud_investigation",
+                    session_id=self._session_id,
+                    metadata={
+                        "transaction_id": txn.get("id", ""),
+                        "turn": step_count,
+                        "tools_called": tool_names,
+                    },
+                )
+
             # Log any text reasoning Claude produced
             for block in response.content:
                 if block.type == "text" and block.text.strip():
@@ -1076,8 +1100,20 @@ PARAMS: none"""
                 print(f"  [!] Ollama error: HTTP {response.status_code}")
                 return None
             
-            answer = response.json().get("response", "").strip()
+            result = response.json()
+            answer = result.get("response", "").strip()
             print(f"  [PLAN] LLM response: {answer[:200]}")
+
+            # Meter Ollama usage
+            if self.meter:
+                self.meter.record(
+                    response=result,
+                    provider="ollama",
+                    customer_id=self._customer_id,
+                    event_type="fraud_investigation",
+                    session_id=self._session_id,
+                    metadata={"phase": "plan", "iteration": iteration},
+                )
             
             return self._parse_plan(answer, context)
             
@@ -1331,8 +1367,20 @@ SUMMARY: <2-3 sentence explanation of your conclusion, referencing specific evid
                 return {"risk_level": "MEDIUM", "verdict": "SUSPICIOUS", "confidence": 0.5,
                         "summary": "LLM verdict unavailable; defaulting to suspicious based on pre-screen alerts."}
             
-            answer = response.json().get("response", "").strip()
+            result = response.json()
+            answer = result.get("response", "").strip()
             print(f"  [VERDICT] LLM: {answer[:300]}")
+
+            # Meter Ollama usage
+            if self.meter:
+                self.meter.record(
+                    response=result,
+                    provider="ollama",
+                    customer_id=self._customer_id,
+                    event_type="fraud_investigation",
+                    session_id=self._session_id,
+                    metadata={"phase": "verdict"},
+                )
             
             return self._parse_verdict(answer)
             
@@ -1484,27 +1532,44 @@ if __name__ == "__main__":
         print(f"\nTotal flagged: {len(flagged)} / total transactions")
     
     elif args.txn:
+        # Initialize metering for CLI
+        from services.metering import MeteringService
+        meter = MeteringService(
+            db_path=os.path.join(os.path.dirname(os.path.abspath(args.db)), "metering.db")
+        )
+        meter.init_db()
+
         investigator = FraudInvestigator(
             db_path=args.db,
             ollama_url=args.ollama,
             model=args.model,
             registry_path=args.registry,
-            backend=args.backend
+            backend=args.backend,
+            metering_service=meter,
         )
         report = investigator.investigate(args.txn)
     
     elif args.investigate_all:
         flagged = list_flagged_transactions(args.db)
+
+        # Initialize metering for CLI
+        from services.metering import MeteringService
+        meter = MeteringService(
+            db_path=os.path.join(os.path.dirname(os.path.abspath(args.db)), "metering.db")
+        )
+        meter.init_db()
+
         investigator = FraudInvestigator(
             db_path=args.db,
             ollama_url=args.ollama,
             model=args.model,
             registry_path=args.registry,
-            backend=args.backend
+            backend=args.backend,
+            metering_service=meter,
         )
         
         print(f"\nInvestigating {len(flagged)} flagged transactions...\n")
-        for f in flagged[:10]:  # cap at 10 to avoid excessive LLM calls
+        for f in flagged:
             report = investigator.investigate(f["transaction"]["id"])
     
     else:

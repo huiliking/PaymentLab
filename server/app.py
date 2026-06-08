@@ -6,6 +6,8 @@ import os
 from flask import Flask, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
+from services.metering import MeteringService
+from routes.metering import metering_bp, init_metering_routes
 load_dotenv()
 
 def create_app():
@@ -25,6 +27,23 @@ def create_app():
     app.register_blueprint(products_bp, url_prefix="/api")
     app.register_blueprint(config_bp, url_prefix="/api")
     app.register_blueprint(fraud_bp, url_prefix="/api")
+
+    
+    # ============================================================
+    # METERING
+    # ============================================================
+    metering_service = MeteringService(
+        db_path=os.path.join(os.path.dirname(__file__), "metering.db")
+    )
+    metering_service.init_db()
+    init_metering_routes(metering_service)
+    app.register_blueprint(metering_bp)
+
+    # Make metering_service available to other modules
+    app.config['METERING_SERVICE'] = metering_service
+
+
+
 
     # Initialize database
     from models.database import init_db

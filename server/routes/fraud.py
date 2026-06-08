@@ -8,7 +8,7 @@ Add to your existing PaymentLab server:
     app.register_blueprint(fraud_bp, url_prefix='/api')
 """
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 import sys
 import os
 
@@ -100,11 +100,14 @@ def get_flagged():
 @fraud_bp.route('/fraud/investigate/<txn_id>', methods=['POST'])
 def investigate_transaction(txn_id):
     """Run full FAA-style investigation on a transaction"""
+    metering_service = current_app.config.get('METERING_SERVICE')
+
     investigator = FraudInvestigator(
         db_path=DB_PATH,
         ollama_url=OLLAMA_URL,
         model=OLLAMA_MODEL,
-        registry_path=REGISTRY_PATH
+        registry_path=REGISTRY_PATH,
+        metering_service=metering_service,
     )
     
     try:
