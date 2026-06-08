@@ -1,0 +1,8 @@
+('3fbe2df3-218', '8101', 29999, 'JP', 'US', 'tanaka.test@gmail.com')
+('54ce08b8-ab0', '8101', 4999, 'JP', 'US', 'tanaka.test@gmail.com')
+('dfeb6a33-a29', '8101', 9999, 'JP', 'US', 'tanaka.test@gmail.com')
+('334282d9-a31', '6109', 320, 'NG', 'CA', 'user219@tempmail.org')
+('a9a57470-4df', '6109', 164, 'PH', 'CA', 'user241@tempmail.org')
+('380d2a6e-142', '6109', 488, 'NG', 'CA', 'user291@tempmail.org')
+('9788e167-6e2', '6109', 464, 'PH', 'CA', 'user781@tempmail.org')
+('2fb73462-78c', '6109', 219, 'RO', 'CA', 'user742@tempmail.org')

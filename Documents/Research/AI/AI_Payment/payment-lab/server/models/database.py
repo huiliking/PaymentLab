@@ -44,10 +44,54 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (order_id) REFERENCES orders(id)
         );
+
+        -- Fraud investigation tables
+        CREATE TABLE IF NOT EXISTS transactions (
+            id TEXT PRIMARY KEY,
+            stripe_payment_intent TEXT,
+            card_last4 TEXT,
+            card_brand TEXT,
+            card_country TEXT,
+            amount_cents INTEGER,
+            currency TEXT,
+            status TEXT,
+            customer_email TEXT,
+            customer_name TEXT,
+            billing_country TEXT,
+            billing_postal TEXT,
+            shipping_address TEXT,
+            browser_locale TEXT,
+            ip_country TEXT,
+            device_fingerprint TEXT,
+            created_at TEXT,
+            metadata TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS investigation_reports (
+            id TEXT PRIMARY KEY,
+            transaction_id TEXT,
+            risk_level TEXT,
+            verdict TEXT,
+            summary TEXT,
+            evidence TEXT,
+            steps TEXT,
+            created_at TEXT,
+            FOREIGN KEY (transaction_id) REFERENCES transactions(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_txn_card ON transactions(card_last4);
+        CREATE INDEX IF NOT EXISTS idx_txn_email ON transactions(customer_email);
+        CREATE INDEX IF NOT EXISTS idx_txn_status ON transactions(status);
     """)
-    conn.commit()
-    conn.close()
-    print("[DB] Initialized payment_lab.db")
+    count = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+    if count == 0:
+        conn.close()
+        from seed_transactions import seed_database
+        seed_database(DB_PATH)
+        print("[DB] Auto-seeded transaction data")
+    else:
+        conn.close()
+        print("[DB] Initialized payment_lab.db")
 
 
 def create_order(payment_intent_id, amount, currency, customer_email,

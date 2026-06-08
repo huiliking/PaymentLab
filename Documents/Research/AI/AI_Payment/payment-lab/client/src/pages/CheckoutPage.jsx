@@ -190,6 +190,7 @@ export default function CheckoutPage({ stripePromise, cart, cartTotal, currency,
         customerEmail: email,
         locale,
         billingCountry,
+        billingAddress,
       })
       setClientSecret(data.client_secret)
       setOrderId(data.order_id)

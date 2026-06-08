@@ -4,9 +4,13 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .env
+.env.*
+*.env
 
 # Database
 *.db
+*.db-shm
+*.db-wal
 *.sqlite3
 
 # Node
@@ -17,3 +21,11 @@ dist/
 # IDE
 .vscode/
 .idea/
+
+# Logs
+*_logs.txt
+*_log.txt
+
+# Duplicate directories
+client/client/
+server/server/
