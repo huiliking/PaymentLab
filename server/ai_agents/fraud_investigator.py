@@ -30,6 +30,10 @@ import requests
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field, asdict
 from typing import Optional
+try:
+    from graph_result_summarizer import summarize_for_llm
+except ModuleNotFoundError:
+    from ai_agents.graph_result_summarizer import summarize_for_llm
 
 try:
     import anthropic as anthropic_sdk
@@ -836,6 +840,7 @@ class FraudInvestigator:
                 response = self.claude.messages.create(
                     model=self.CLAUDE_MODEL,
                     max_tokens=1024,
+                    cache_control={"type": "ephemeral"},
                     system=system_prompt,
                     tools=self.registry.get_schemas(),  # ← loaded from registry.json
                     messages=messages
@@ -846,14 +851,18 @@ class FraudInvestigator:
                 traceback.print_exc()
                 raise
 
-            # Track tokens
-            input_tok = response.usage.input_tokens
-            output_tok = response.usage.output_tokens
+            # Track tokens and cache usage
+            usage = response.usage
+            input_tok = getattr(usage, 'input_tokens', 0)
+            output_tok = getattr(usage, 'output_tokens', 0)
+            cache_read = getattr(usage, 'cache_read_input_tokens', 0)
+            cache_write = getattr(usage, 'cache_creation_input_tokens', 0)
             total_input_tokens += input_tok
             total_output_tokens += output_tok
 
-            print(f"  [TOKENS] Turn {step_count}: input={input_tok}, output={output_tok} "
-                  f"| Running total: input={total_input_tokens}, output={total_output_tokens}")
+            print(f"  [TOKENS] Turn {step_count}: input={input_tok} "
+                f"(cache read: {cache_read}, cache write: {cache_write}), output={output_tok} "
+                f"| Running total: input={total_input_tokens}, output={total_output_tokens}")
             print(f"  [PLAN]   stop_reason={response.stop_reason}")
 
             # Meter this turn
@@ -869,6 +878,8 @@ class FraudInvestigator:
                         "transaction_id": txn.get("id", ""),
                         "turn": step_count,
                         "tools_called": tool_names,
+                        "cache_read_input_tokens": cache_read,
+                        "cache_creation_input_tokens": cache_write,
                     },
                 )
 
@@ -929,28 +940,34 @@ class FraudInvestigator:
                 print(f"  [GATHER] Tool: {tool_name}")
                 print(f"  [GATHER] Params: {json.dumps(tool_input, default=str)}")
                 print(f"  [REGISTRY] Dispatching → registry.execute('{tool_name}', ..., tools_instance)")
+                params = tool_input
 
-                tool_result = self.registry.execute(tool_name, tool_input, self.tools)
-                result_str = json.dumps(tool_result, default=str)
+                tool_result = self.registry.execute(tool_name, params, self.tools)
 
                 if "error" in tool_result:
                     print(f"  [REGISTRY] ✗ Error: {tool_result['error']}")
                 else:
                     result_keys = [k for k in tool_result.keys() if k != 'tool']
                     print(f"  [REGISTRY] ✓ Result keys: {', '.join(result_keys)}")
-                print(f"  [GATHER] Result: {result_str[:400]}")
 
-                # Store raw result so Flask/React can access it (e.g. graph data for IdentityGraphPanel)
+                # Full result → React frontend (D3 graph panel needs nodes/edges)
                 report.tool_results[tool_name] = tool_result
+
+                # Summarized result → Claude conversation history
+                # (strips graph.nodes/edges from check_identity_graph, passthrough for all others)
+                llm_result = summarize_for_llm(tool_name, tool_result)
+                result_str = json.dumps(llm_result, default=str)
+
+                print(f"  [GATHER] Result: {result_str[:400]}")
 
                 context["tools_called"].append(tool_name)
                 context["evidence_gathered"].append({
-                    "tool": tool_name, "params": tool_input, "result": tool_result
+                    "tool": tool_name, "params": params, "result": tool_result
                 })
 
                 report.steps.append(InvestigationStep(
                     step_number=step_count, phase="GATHER",
-                    action=f"Called {tool_name} with {json.dumps(tool_input, default=str)}",
+                    action=f"Called {tool_name} with {json.dumps(params, default=str)}",
                     result=result_str[:500],
                     tool_used=tool_name
                 ))
