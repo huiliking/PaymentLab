@@ -7,6 +7,7 @@ import CheckoutPage from './pages/CheckoutPage'
 import ConfirmationPage from './pages/ConfirmationPage'
 import FraudDashboard from './pages/FraudDashboard'
 import ToolDashboard from './pages/ToolDashboard'
+import UsageDashboard from './pages/UsageDashboard'
 
 export default function App() {
   const [stripePromise, setStripePromise] = useState(null)
@@ -123,6 +124,15 @@ export default function App() {
             Tools
           </Link>
 
+          <Link to="/metering" style={{
+            textDecoration: 'none',
+            color: 'var(--ink-muted)',
+            fontSize: '0.9rem',
+            fontWeight: 500,
+          }}>
+            Usage
+          </Link>
+
           <Link to="/checkout" style={{
             textDecoration: 'none',
             display: 'flex',
@@ -176,6 +186,9 @@ export default function App() {
           } />
           <Route path="/tools" element={
             <ToolDashboard />
+          } />
+          <Route path="/metering" element={
+            <UsageDashboard />
           } />
         </Routes>
       </div>

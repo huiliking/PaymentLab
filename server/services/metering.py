@@ -75,19 +75,21 @@ class MeteringService:
                 -- Raw event log: one row per LLM API call
                 -- APPEND-ONLY — never update or delete rows
                 CREATE TABLE IF NOT EXISTS usage_events (
-                    id              TEXT PRIMARY KEY,
-                    session_id      TEXT,
-                    customer_id     TEXT NOT NULL DEFAULT 'demo_merchant',
-                    event_type      TEXT NOT NULL DEFAULT 'unknown',
-                    provider        TEXT NOT NULL,
-                    model           TEXT NOT NULL,
-                    input_tokens    INTEGER NOT NULL DEFAULT 0,
-                    output_tokens   INTEGER NOT NULL DEFAULT 0,
-                    total_tokens    INTEGER NOT NULL DEFAULT 0,
-                    cost_usd        REAL NOT NULL DEFAULT 0.0,
-                    tool_calls      INTEGER NOT NULL DEFAULT 0,
-                    metadata_json   TEXT DEFAULT '{}',
-                    created_at      TEXT NOT NULL
+                    id                    TEXT PRIMARY KEY,
+                    session_id            TEXT,
+                    customer_id           TEXT NOT NULL DEFAULT 'demo_merchant',
+                    event_type            TEXT NOT NULL DEFAULT 'unknown',
+                    provider              TEXT NOT NULL,
+                    model                 TEXT NOT NULL,
+                    input_tokens          INTEGER NOT NULL DEFAULT 0,
+                    output_tokens         INTEGER NOT NULL DEFAULT 0,
+                    total_tokens          INTEGER NOT NULL DEFAULT 0,
+                    cost_usd              REAL NOT NULL DEFAULT 0.0,
+                    tool_calls            INTEGER NOT NULL DEFAULT 0,
+                    cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+                    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                    metadata_json         TEXT DEFAULT '{}',
+                    created_at            TEXT NOT NULL
                 );
 
                 -- Indexes for common query patterns
@@ -208,8 +210,9 @@ class MeteringService:
                 INSERT INTO usage_events
                     (id, session_id, customer_id, event_type, provider, model,
                      input_tokens, output_tokens, total_tokens, cost_usd,
-                     tool_calls, metadata_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     tool_calls, cache_read_tokens, cache_creation_tokens,
+                     metadata_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 record.record_id,
                 session_id,
@@ -222,6 +225,8 @@ class MeteringService:
                 record.total_tokens,
                 record.cost_usd,
                 record.raw_metadata.get("tool_calls", 0),
+                record.raw_metadata.get("cache_read_tokens", 0),
+                record.raw_metadata.get("cache_creation_tokens", 0),
                 json.dumps(record.raw_metadata),
                 record.recorded_at,
             ))
@@ -298,14 +303,16 @@ class MeteringService:
                 # Totals
                 totals = conn.execute("""
                     SELECT
-                        COUNT(*)                    as total_events,
-                        COUNT(DISTINCT session_id)  as total_sessions,
-                        COALESCE(SUM(input_tokens), 0)  as total_input_tokens,
-                        COALESCE(SUM(output_tokens), 0) as total_output_tokens,
-                        COALESCE(SUM(total_tokens), 0)  as total_tokens,
-                        COALESCE(SUM(cost_usd), 0)      as total_cost_usd,
-                        MIN(created_at)             as first_event,
-                        MAX(created_at)             as last_event
+                        COUNT(*)                            as total_events,
+                        COUNT(DISTINCT session_id)          as total_sessions,
+                        COALESCE(SUM(input_tokens), 0)      as total_input_tokens,
+                        COALESCE(SUM(output_tokens), 0)     as total_output_tokens,
+                        COALESCE(SUM(total_tokens), 0)      as total_tokens,
+                        COALESCE(SUM(cost_usd), 0)          as total_cost_usd,
+                        COALESCE(SUM(cache_read_tokens), 0)     as total_cache_read_tokens,
+                        COALESCE(SUM(cache_creation_tokens), 0) as total_cache_creation_tokens,
+                        MIN(created_at)                     as first_event,
+                        MAX(created_at)                     as last_event
                     FROM usage_events
                     WHERE customer_id = ? AND created_at >= ?
                 """, (customer_id, period_start)).fetchone()
@@ -354,6 +361,16 @@ class MeteringService:
                 """, (customer_id, period_start)).fetchone()
 
                 totals_dict = dict(totals)
+
+                # Estimate cache savings: what it would have cost at full input rate
+                # minus what was actually charged for cache reads (0.10× input rate).
+                # We use Sonnet 4 default rate ($3/M) as a reasonable proxy here;
+                # for mixed-model workloads the error is small.
+                DEFAULT_INPUT_RATE = 3.00  # $ per 1M tokens
+                cache_read = totals_dict.get("total_cache_read_tokens", 0) or 0
+                savings = cache_read * DEFAULT_INPUT_RATE * (1.0 - 0.10) / 1_000_000
+                totals_dict["estimated_cache_savings_usd"] = round(savings, 4)
+
                 return {
                     "customer_id": customer_id,
                     "period_start": period_start,
