@@ -67,6 +67,7 @@ class IdentityGraphResult:
     risk_label: str = "LOW"        # LOW | MEDIUM | HIGH | CRITICAL
     fraud_ring_detected: bool = False
     synthetic_identity_signals: list = field(default_factory=list)
+    geographic_profile: dict = field(default_factory=dict)
     summary: str = ""
 
 
@@ -137,6 +138,51 @@ class IdentityGraphBuilder:
             (value, exclude_txn_id)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def _analyze_geography(self, conn, visited_txns: set) -> dict:
+        """Aggregate geographic signals across all transactions in the cluster."""
+        if not visited_txns:
+            return {"coherence_score": 1.0, "merchant_count": 1}
+
+        placeholders = ",".join("?" for _ in visited_txns)
+        rows = conn.execute(
+            f"""SELECT card_country, billing_country, ip_country, browser_locale, merchant_id
+                FROM transactions WHERE id IN ({placeholders})""",
+            list(visited_txns)
+        ).fetchall()
+
+        card_countries = set()
+        billing_countries = set()
+        ip_countries = set()
+        locales = set()
+        merchants = set()
+
+        for r in rows:
+            if r["card_country"]:
+                card_countries.add(r["card_country"])
+            if r["billing_country"]:
+                billing_countries.add(r["billing_country"])
+            if r["ip_country"]:
+                ip_countries.add(r["ip_country"])
+            if r["browser_locale"]:
+                locales.add(r["browser_locale"])
+            if r["merchant_id"]:
+                merchants.add(r["merchant_id"])
+
+        all_countries = card_countries | billing_countries | ip_countries
+        unique_count = len(all_countries) if all_countries else 1
+        coherence_score = round(max(0.0, 1.0 - (unique_count - 1) / 5), 2)
+
+        return {
+            "card_issuing_countries": sorted(card_countries),
+            "billing_countries": sorted(billing_countries),
+            "ip_countries": sorted(ip_countries),
+            "browser_locales": sorted(locales),
+            "merchants": sorted(merchants),
+            "merchant_count": len(merchants),
+            "total_unique_countries": unique_count,
+            "coherence_score": coherence_score,
+        }
 
     def build(self, txn_id: str) -> IdentityGraphResult:
         result = IdentityGraphResult(
@@ -253,8 +299,6 @@ class IdentityGraphBuilder:
                             if hop + 1 < self.MAX_HOPS:
                                 queue.append((neighbor, hop + 1))
 
-            conn.close()
-
             # ---- Compute node risk scores ----
             for node in node_map.values():
                 if node.txn_count > 0:
@@ -278,29 +322,42 @@ class IdentityGraphBuilder:
             result.known_fraud_neighbors= sum(1 for n in card_nodes    if n.fraud_count > 0)
             result.max_card_reuse       = max((n.txn_count for n in node_map.values()), default=0)
 
+            # ---- Geographic profile (cross-merchant + country analysis) ----
+            result.geographic_profile = self._analyze_geography(conn, visited_txns)
+            conn.close()
+
             # ---- Synthetic identity signals ----
             signals = []
             if result.shared_email_count >= 3:
-                signals.append(f"{result.shared_email_count} emails shared across multiple cards — possible account farming")
+                signals.append(f"{result.shared_email_count} emails shared across multiple cards - possible account farming")
             if result.shared_address_count >= 2:
-                signals.append(f"{result.shared_address_count} addresses reused across cards — drop address pattern")
+                signals.append(f"{result.shared_address_count} addresses reused across cards - drop address pattern")
             if result.shared_ip_count >= 3:
-                signals.append(f"{result.shared_ip_count} IPs shared — possible botnet or proxy cluster")
+                signals.append(f"{result.shared_ip_count} IPs shared - possible botnet or proxy cluster")
             if result.shared_device_count >= 2:
-                signals.append(f"{result.shared_device_count} devices shared — device reuse / emulator pool")
+                signals.append(f"{result.shared_device_count} devices shared - device reuse / emulator pool")
             if result.known_fraud_neighbors >= 2:
                 signals.append(f"{result.known_fraud_neighbors} neighboring cards have fraud verdicts")
             if result.cluster_size >= 5:
                 signals.append(f"Large cluster: {result.cluster_size} cards connected to this transaction's entities")
+            geo = result.geographic_profile
+            if len(geo.get("card_issuing_countries", [])) >= 3:
+                signals.append(f"Cards issued in {len(geo['card_issuing_countries'])} different countries - possible stolen card aggregation")
+            if geo.get("merchant_count", 0) >= 2:
+                signals.append(f"Activity spans {geo['merchant_count']} merchants - cross-merchant fraud pattern")
+            if geo.get("coherence_score", 1.0) < 0.3:
+                signals.append(f"Low geographic coherence ({geo['coherence_score']:.2f}) - countries in card, billing, IP, and locale are highly divergent")
             result.synthetic_identity_signals = signals
 
             # ---- Risk scoring (weighted formula) ----
             score = 0.0
-            score += min(result.cluster_size / 20, 1.0)          * 0.25
-            score += min(result.shared_email_count / 5, 1.0)     * 0.20
-            score += min(result.shared_address_count / 5, 1.0)   * 0.20
-            score += min(result.known_fraud_neighbors / 5, 1.0)  * 0.25
+            score += min(result.cluster_size / 20, 1.0)          * 0.20
+            score += min(result.shared_email_count / 5, 1.0)     * 0.15
+            score += min(result.shared_address_count / 5, 1.0)   * 0.15
+            score += min(result.known_fraud_neighbors / 5, 1.0)  * 0.20
             score += min(result.shared_device_count / 3, 1.0)    * 0.10
+            score += (1.0 - geo.get("coherence_score", 1.0))     * 0.10
+            score += min(geo.get("merchant_count", 1) / 3, 1.0)  * 0.10
             result.risk_score = round(min(score, 1.0), 3)
 
             if result.risk_score >= 0.75:
@@ -337,12 +394,17 @@ def _build_summary(r: IdentityGraphResult) -> str:
         f"  Known-fraud neighbors: {r.known_fraud_neighbors}",
         f"  Risk score: {r.risk_score:.2f} ({r.risk_label})",
     ]
+    geo = r.geographic_profile
+    if geo:
+        lines.append(f"  Geographic: {geo.get('total_unique_countries', 0)} countries | "
+                      f"{geo.get('merchant_count', 0)} merchant(s) | "
+                      f"coherence {geo.get('coherence_score', 0):.2f}")
     if r.fraud_ring_detected:
-        lines.append("  ⚠ FRAUD RING DETECTED")
+        lines.append("  ** FRAUD RING DETECTED **")
     if r.synthetic_identity_signals:
         lines.append("  Signals:")
         for s in r.synthetic_identity_signals:
-            lines.append(f"    • {s}")
+            lines.append(f"    - {s}")
     return "\n".join(lines)
 
 
@@ -396,6 +458,7 @@ def check_identity_graph(self, transaction_id: str, hops: int = 2) -> dict:
             "fraud_ring_detected": result.fraud_ring_detected,
             "synthetic_identity_signals": result.synthetic_identity_signals,
         },
+        "geographic_profile": result.geographic_profile,
         "summary": result.summary,
     }
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import IdentityGraphPanel from "./IdentityGraphPanel";
+import LocaleRiskPanel from "./LocaleRiskPanel";
 
 /**
  * FraudDashboard.jsx
@@ -291,6 +292,22 @@ function ReportPanel({ report, onClose }) {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Locale Risk Panel — rendered when check_locale_consistency was called */}
+        {report.tool_results?.check_locale_consistency && (
+          <div style={{ marginTop: 24 }}>
+            <h3 style={{
+              fontSize: 14, fontWeight: 600, margin: "0 0 10px",
+              fontFamily: "'JetBrains Mono', monospace", color: "var(--text-primary)",
+            }}>
+              Locale Risk Analysis
+            </h3>
+            <LocaleRiskPanel
+              localeData={report.tool_results.check_locale_consistency}
+              geographicProfile={report.tool_results?.check_identity_graph?.geographic_profile}
+            />
           </div>
         )}
 

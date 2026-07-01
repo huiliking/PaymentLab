@@ -91,6 +91,7 @@ def _summarize_identity_graph(result: dict) -> dict:
         "graph": graph_summary,
         "cluster": result.get("cluster"),
         "risk": result.get("risk"),
+        "geographic_profile": result.get("geographic_profile"),
         "summary": result.get("summary"),
     }
 

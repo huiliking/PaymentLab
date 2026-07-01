@@ -48,6 +48,7 @@ def init_db():
         -- Fraud investigation tables
         CREATE TABLE IF NOT EXISTS transactions (
             id TEXT PRIMARY KEY,
+            merchant_id TEXT,
             stripe_payment_intent TEXT,
             card_last4 TEXT,
             card_brand TEXT,
@@ -82,6 +83,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_txn_card ON transactions(card_last4);
         CREATE INDEX IF NOT EXISTS idx_txn_email ON transactions(customer_email);
         CREATE INDEX IF NOT EXISTS idx_txn_status ON transactions(status);
+        CREATE INDEX IF NOT EXISTS idx_txn_merchant ON transactions(merchant_id);
     """)
     count = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
     if count == 0:

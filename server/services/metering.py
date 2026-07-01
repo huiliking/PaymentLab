@@ -68,6 +68,17 @@ class MeteringService:
             self._local.conn.rollback()
             raise
 
+    def _migrate_db(self, conn):
+        """Add columns introduced after initial schema without dropping existing data."""
+        existing = {r[1] for r in conn.execute("PRAGMA table_info(usage_events)").fetchall()}
+        for col, defn in [
+            ("cache_read_tokens",     "INTEGER NOT NULL DEFAULT 0"),
+            ("cache_creation_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ]:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE usage_events ADD COLUMN {col} {defn}")
+        conn.commit()
+
     def init_db(self):
         """Create tables if they don't exist. Safe to call multiple times."""
         with self._get_conn() as conn:
@@ -119,6 +130,7 @@ class MeteringService:
                 );
             """)
             conn.commit()
+            self._migrate_db(conn)
         self._initialized = True
         event_count = self._count_events()
         print(f"  [METERING] Database ready: {self.db_path} ({event_count} events)")

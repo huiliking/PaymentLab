@@ -240,7 +240,30 @@ class InvestigationTools:
         
         if detected_shipping_country and billing and detected_shipping_country != billing:
             mismatches.append(f"Shipping address appears to be in {detected_shipping_country} but billing country is {billing}")
-        
+
+        # Cross-transaction pattern lookup: does this mismatch pattern repeat across the DB?
+        cross_txn_count = 0
+        cross_merchant_count = 0
+        pattern_description = ""
+        if mismatches and ip and billing and ip != billing:
+            cross_rows = self._query(
+                "SELECT COUNT(*) as cnt, COUNT(DISTINCT merchant_id) as merchants "
+                "FROM transactions WHERE ip_country = ? AND billing_country = ? AND ip_country != billing_country",
+                (ip, billing)
+            )
+            if cross_rows:
+                cross_txn_count = cross_rows[0]["cnt"]
+                cross_merchant_count = cross_rows[0]["merchants"]
+                if cross_txn_count > 1:
+                    pattern_description = (
+                        f"IP={ip}, billing={billing} mismatch seen in "
+                        f"{cross_txn_count} transactions across {cross_merchant_count} merchant(s)"
+                    )
+
+        risk = "HIGH" if len(mismatches) >= 2 else ("MEDIUM" if len(mismatches) == 1 else "LOW")
+        if cross_merchant_count >= 2:
+            risk = "CRITICAL" if risk == "HIGH" else ("HIGH" if risk == "MEDIUM" else risk)
+
         return {
             "tool": "check_locale_consistency",
             "transaction_id": txn_id,
@@ -251,7 +274,10 @@ class InvestigationTools:
             "shipping_address": shipping,
             "mismatches": mismatches,
             "is_consistent": len(mismatches) == 0,
-            "risk": "HIGH" if len(mismatches) >= 2 else ("MEDIUM" if len(mismatches) == 1 else "LOW")
+            "risk": risk,
+            "cross_txn_count": cross_txn_count,
+            "cross_merchant_count": cross_merchant_count,
+            "pattern_description": pattern_description,
         }
     
     def check_velocity(self, card_last4, hours=2):
@@ -434,7 +460,7 @@ class RuleEngine:
         
         # Rule 2: Very small amount (card testing signal)
         if amount_usd < 5:
-            triggers.append({"rule": "MICRO_AMOUNT", "risk": "MEDIUM", "detail": f"${amount_usd:.2f} — possible card testing"})
+            triggers.append({"rule": "MICRO_AMOUNT", "risk": "MEDIUM", "detail": f"${amount_usd:.2f} - possible card testing"})
         
         # Rule 3: Failed transaction
         if txn["status"] == "failed":
@@ -515,7 +541,7 @@ class FraudInvestigator:
             metering_service: MeteringService instance for usage tracking (optional)
         """
         print(f"\n  {'='*55}")
-        print(f"  FRAUD INVESTIGATOR — BOOT SEQUENCE")
+        print(f"  FRAUD INVESTIGATOR - BOOT SEQUENCE")
         print(f"  {'='*55}")
 
         # Phase 1: Database + tools
@@ -548,7 +574,7 @@ class FraudInvestigator:
             # Force Ollama regardless of API key
             self.claude = None
             self.use_claude = False
-            print(f"  [BOOT 3/3] Backend: Ollama ({model}) — forced via --backend=ollama")
+            print(f"  [BOOT 3/3] Backend: Ollama ({model}) - forced via --backend=ollama")
         elif backend == "claude":
             # Force Claude — error if no key
             if not ANTHROPIC_AVAILABLE:
@@ -557,20 +583,20 @@ class FraudInvestigator:
                 raise RuntimeError("--backend=claude requires ANTHROPIC_API_KEY environment variable")
             self.claude = anthropic_sdk.Anthropic(api_key=api_key)
             self.use_claude = True
-            print(f"  [BOOT 3/3] Backend: Claude API ({self.CLAUDE_MODEL}) — forced via --backend=claude")
+            print(f"  [BOOT 3/3] Backend: Claude API ({self.CLAUDE_MODEL}) - forced via --backend=claude")
             print(f"             API key: {api_key[:12]}...{api_key[-4:]}")
         else:
             # Auto: Claude if key exists, else Ollama
             if api_key and ANTHROPIC_AVAILABLE:
                 self.claude = anthropic_sdk.Anthropic(api_key=api_key)
                 self.use_claude = True
-                print(f"  [BOOT 3/3] Backend: Claude API ({self.CLAUDE_MODEL}) — auto-detected API key")
+                print(f"  [BOOT 3/3] Backend: Claude API ({self.CLAUDE_MODEL}) - auto-detected API key")
                 print(f"             API key: {api_key[:12]}...{api_key[-4:]}")
             else:
                 self.claude = None
                 self.use_claude = False
                 reason = "anthropic package not installed" if not ANTHROPIC_AVAILABLE else "ANTHROPIC_API_KEY not set"
-                print(f"  [BOOT 3/3] Backend: Ollama ({model}) — {reason}")
+                print(f"  [BOOT 3/3] Backend: Ollama ({model}) - {reason}")
 
         print(f"  {'='*55}\n")
     
@@ -604,7 +630,7 @@ class FraudInvestigator:
         ))
         
         if not triggers:
-            print(f"  [+] No rules triggered — transaction appears clean")
+            print(f"  [+] No rules triggered - transaction appears clean")
             report.risk_level = "LOW"
             report.verdict = "LEGITIMATE"
             report.confidence = 0.9
@@ -631,7 +657,7 @@ class FraudInvestigator:
             report.summary = f"Transaction {txn_id} not found."
             return report
 
-        print(f"\n  [CONTEXT] Card: ****{txn.get('card_last4')}  Amount: {txn.get('amount_cents')} {txn.get('currency')}")
+        print(f"\n  [CONTEXT] Card: ****{txn.get('card_last4')}  Amount: {txn.get('amount_cents', 0) / 100:.2f} {txn.get('currency')}")
         print(f"  [CONTEXT] Email: {txn.get('customer_email')}  IP: {txn.get('ip_country')}  Billing: {txn.get('billing_country')}")
 
         # Phase 1-N: LLM investigation loop
@@ -689,7 +715,7 @@ class FraudInvestigator:
                 print(f"  [SKIP] Already called {tool_name} with same params")
                 consecutive_skips += 1
                 if consecutive_skips >= 2:
-                    print(f"  [!] 2 consecutive skips — ending investigation")
+                    print(f"  [!] 2 consecutive skips - ending investigation")
                     break
                 context["tools_called"].append(tool_name + " (skipped-dup)")
                 continue
@@ -700,10 +726,10 @@ class FraudInvestigator:
             tool_result = self.registry.execute(tool_name, tool_params, self.tools)
 
             if "error" in tool_result:
-                print(f"  [REGISTRY] ✗ Error: {tool_result['error']}")
+                print(f"  [REGISTRY] Error: {tool_result['error']}")
             else:
                 result_keys = [k for k in tool_result.keys() if k != 'tool']
-                print(f"  [REGISTRY] ✓ Result keys: {', '.join(result_keys)}")
+                print(f"  [REGISTRY] OK, keys: {', '.join(result_keys)}")
 
             # Store raw result so Flask/React can access it (e.g. graph data for IdentityGraphPanel)
             report.tool_results[tool_name] = tool_result
@@ -899,7 +925,7 @@ class FraudInvestigator:
                 for block in response.content:
                     if block.type == "text":
                         verdict_text = block.text
-                print(f"  [PLAN]   Claude concluded — writing verdict")
+                print(f"  [PLAN]   Claude concluded - writing verdict")
                 break
 
             # ── GATHER: Execute ALL tools Claude chose ──────────────────────
@@ -945,10 +971,10 @@ class FraudInvestigator:
                 tool_result = self.registry.execute(tool_name, params, self.tools)
 
                 if "error" in tool_result:
-                    print(f"  [REGISTRY] ✗ Error: {tool_result['error']}")
+                    print(f"  [REGISTRY] Error: {tool_result['error']}")
                 else:
                     result_keys = [k for k in tool_result.keys() if k != 'tool']
-                    print(f"  [REGISTRY] ✓ Result keys: {', '.join(result_keys)}")
+                    print(f"  [REGISTRY] OK, keys: {', '.join(result_keys)}")
 
                 # Full result → React frontend (D3 graph panel needs nodes/edges)
                 report.tool_results[tool_name] = tool_result
@@ -1058,7 +1084,7 @@ class FraudInvestigator:
         txn = context["transaction"]
         txn_summary = (
             f"ID: {txn.get('id')}, Card: ****{txn.get('card_last4')}, "
-            f"Amount: {txn.get('amount_cents')} {txn.get('currency')}, "
+            f"Amount: {txn.get('amount_cents', 0) / 100:.2f} {txn.get('currency')}, "
             f"Email: {txn.get('customer_email')}, "
             f"Billing: {txn.get('billing_country')}, IP: {txn.get('ip_country')}, "
             f"Locale: {txn.get('browser_locale')}, Device: {txn.get('device_fingerprint')}, "
@@ -1070,7 +1096,36 @@ class FraudInvestigator:
             for t in context["pre_screen_triggers"]
         ])
         
+        # Build tool-priority guidance for Ollama
+        tools_not_called = [
+            t['name'] for t in self.registry.get_schemas()
+            if t['name'] not in context["tools_called"]
+        ]
+        tools_not_called_str = ", ".join(tools_not_called) if tools_not_called else "all tools used"
+
+        if iteration == 0:
+            strategy_hint = (
+                "STRATEGY: Start by gathering transaction details or checking the email/card history. "
+                "A thorough investigation uses at least 4 different tools before concluding."
+            )
+        elif iteration <= 2:
+            strategy_hint = (
+                f"STRATEGY: You have only used {len(context['tools_called'])} tool(s) so far. "
+                f"Pick a DIFFERENT tool you have NOT used yet. "
+                f"Tools still available: {tools_not_called_str}. "
+                "Prioritize: check_locale_consistency (geographic mismatches), "
+                "check_identity_graph (fraud ring detection), get_ip_reputation (IP risk), "
+                "check_velocity (transaction speed patterns)."
+            )
+        else:
+            strategy_hint = (
+                f"You have called {len(context['tools_called'])} tools. "
+                f"If you have gathered enough evidence to assess risk, use CONCLUDE. "
+                f"Otherwise, try one of: {tools_not_called_str}."
+            )
+
         prompt = f"""You are a fraud investigator analyzing a suspicious transaction.
+Your job is to use multiple investigation tools to gather evidence, then conclude.
 
 TRANSACTION:
 {txn_summary}
@@ -1084,22 +1139,20 @@ EVIDENCE GATHERED SO FAR:{evidence_summary if evidence_summary else " (none yet)
 
 AVAILABLE TOOLS:
 {tool_desc}
-- CONCLUDE: End investigation (use when you have enough evidence)
+- CONCLUDE: End investigation (use when you have enough evidence from at least 4 tools)
 
-ITERATION: {iteration + 1} of {self.max_steps}
-{"You have called several tools already. Use CONCLUDE if you have enough evidence." if iteration >= 3 else ""}
-Decide what to investigate next. Choose ONE tool to call.
-Do NOT repeat a tool you already called.
+{strategy_hint}
 
-Respond in EXACTLY this format:
-REASONING: <why you want to call this tool>
+RULES:
+1. Each iteration, pick ONE tool you have NOT called yet.
+2. Never repeat a tool. Never call the same tool with different params.
+3. Use at least 4 different tools before CONCLUDE.
+4. ITERATION: {iteration + 1} of {self.max_steps}.
+
+Respond in EXACTLY this format (3 lines, nothing else):
+REASONING: <one sentence about why this tool>
 TOOL: <tool_name>
-PARAMS: <param1=value1, param2=value2>
-
-If you have enough evidence, respond:
-REASONING: <why investigation is complete>
-TOOL: CONCLUDE
-PARAMS: none"""
+PARAMS: <param1=value1, param2=value2>"""
 
         try:
             response = requests.post(
@@ -1214,9 +1267,13 @@ PARAMS: none"""
         if tool_name == "check_locale_consistency":
             mismatches = result.get("mismatches", [])
             if mismatches:
+                finding = f"{len(mismatches)} locale inconsistencies: {'; '.join(mismatches)}"
+                cross_merchants = result.get("cross_merchant_count", 0)
+                if cross_merchants >= 2:
+                    finding += f" [CROSS-MERCHANT: pattern seen across {cross_merchants} merchants, {result.get('cross_txn_count', 0)} total txns]"
                 return Evidence(
                     source=tool_name,
-                    finding=f"{len(mismatches)} locale inconsistencies: {'; '.join(mismatches)}",
+                    finding=finding,
                     risk_signal=risk,
                     details=result
                 )
@@ -1305,11 +1362,14 @@ PARAMS: none"""
             cluster_size = cluster.get("size", 0)
             fraud_neighbors = cluster.get("known_fraud_neighbors", 0)
             signals = risk_info.get("synthetic_identity_signals", [])
+            geo = result.get("geographic_profile", {})
             finding = (
                 f"Identity graph: {cluster_size} cards in cluster, "
                 f"{fraud_neighbors} with fraud verdicts"
                 + (", fraud ring detected" if fraud_ring else "")
-                + (f" — {signals[0]}" if signals else "")
+                + (f", spans {geo['merchant_count']} merchants" if geo.get("merchant_count", 0) >= 2 else "")
+                + (f", {geo.get('total_unique_countries', 0)} countries involved" if geo.get("total_unique_countries", 0) >= 2 else "")
+                + (f" - {signals[0]}" if signals else "")
             )
             return Evidence(
                 source=tool_name,
@@ -1326,7 +1386,7 @@ PARAMS: none"""
         txn = context["transaction"]
         txn_summary = (
             f"Card: ****{txn.get('card_last4')}, "
-            f"Amount: {txn.get('amount_cents')} {txn.get('currency')}, "
+            f"Amount: {txn.get('amount_cents', 0) / 100:.2f} {txn.get('currency')}, "
             f"Email: {txn.get('customer_email')}, "
             f"Billing: {txn.get('billing_country')}, IP: {txn.get('ip_country')}"
         )
@@ -1465,23 +1525,23 @@ SUMMARY: <2-3 sentence explanation of your conclusion, referencing specific evid
     
     def _print_report(self, report):
         """Print investigation report to console"""
-        risk_colors = {"LOW": "✅", "MEDIUM": "⚠️", "HIGH": "🔴", "CRITICAL": "🚨"}
-        verdict_colors = {"LEGITIMATE": "✅", "SUSPICIOUS": "⚠️", "FRAUDULENT": "🚨"}
-        
+        risk_icons = {"LOW": "[OK]", "MEDIUM": "[!!]", "HIGH": "[**]", "CRITICAL": "[!!]"}
+        verdict_icons = {"LEGITIMATE": "[OK]", "SUSPICIOUS": "[!!]", "FRAUDULENT": "[!!]"}
+
         print(f"\n{'='*60}")
         print(f"INVESTIGATION REPORT")
         print(f"{'='*60}")
         print(f"Transaction: {report.transaction_id}")
-        print(f"Risk Level:  {risk_colors.get(report.risk_level, '?')} {report.risk_level}")
-        print(f"Verdict:     {verdict_colors.get(report.verdict, '?')} {report.verdict}")
+        print(f"Risk Level:  {risk_icons.get(report.risk_level, '?')} {report.risk_level}")
+        print(f"Verdict:     {verdict_icons.get(report.verdict, '?')} {report.verdict}")
         print(f"Confidence:  {report.confidence:.0%}")
         print(f"\nSummary: {report.summary}")
-        
+
         if report.evidence:
             print(f"\nEvidence ({len(report.evidence)} items):")
             for e in report.evidence:
                 if isinstance(e, Evidence):
-                    signal = {"LOW": "✅", "MEDIUM": "⚠️", "HIGH": "🔴", "CRITICAL": "🚨"}.get(e.risk_signal, "?")
+                    signal = {"LOW": "[OK]", "MEDIUM": "[!!]", "HIGH": "[**]", "CRITICAL": "[!!]"}.get(e.risk_signal, "?")
                     print(f"  {signal} [{e.source}] {e.finding}")
         
         print(f"\nInvestigation Steps ({len(report.steps)}):")
@@ -1545,7 +1605,7 @@ if __name__ == "__main__":
             txn = f["transaction"]
             triggers = f["triggers"]
             trigger_names = [t["rule"] for t in triggers]
-            print(f"  {txn['id']} | ****{txn['card_last4']} | {txn['amount_cents']} {txn['currency']} | {', '.join(trigger_names)}")
+            print(f"  {txn['id']} | ****{txn['card_last4']} | {txn['amount_cents'] / 100:.2f} {txn['currency']} | {', '.join(trigger_names)}")
         print(f"\nTotal flagged: {len(flagged)} / total transactions")
     
     elif args.txn:

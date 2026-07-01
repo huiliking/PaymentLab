@@ -220,15 +220,18 @@ function CachePanel({ totals }) {
 
 // ── Main Component ─────────────────────────────────────────────────────────
 
+const POLL_INTERVAL_MS = 10_000; // refresh every 10s
+
 export default function UsageDashboard() {
   const [summary, setSummary] = useState(null);
   const [breakdown, setBreakdown] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [days, setDays] = useState(30);
+  const [lastUpdated, setLastUpdated] = useState(null);
 
-  useEffect(() => {
-    setLoading(true);
+  const fetchData = (showSpinner = false) => {
+    if (showSpinner) setLoading(true);
     setError(null);
 
     Promise.all([
@@ -238,12 +241,24 @@ export default function UsageDashboard() {
       .then(([sum, brk]) => {
         setSummary(sum);
         setBreakdown(brk.data || []);
+        setLastUpdated(new Date());
         setLoading(false);
       })
       .catch(err => {
         setError(err.message);
         setLoading(false);
       });
+  };
+
+  // Initial load + re-fetch when period changes
+  useEffect(() => {
+    fetchData(true);
+  }, [days]);
+
+  // Auto-refresh poll
+  useEffect(() => {
+    const timer = setInterval(() => fetchData(false), POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
   }, [days]);
 
   if (loading) {
@@ -277,7 +292,19 @@ export default function UsageDashboard() {
       <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "1rem" }}>
         <div>
           <h1>AI Usage Dashboard</h1>
-          <p>Cost and token metering for fraud investigation runs · <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.82rem" }}>{CUSTOMER_ID}</code></p>
+          <p style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+            Cost and token metering for fraud investigation runs ·{" "}
+            <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.82rem" }}>{CUSTOMER_ID}</code>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "0.75rem", color: "var(--success)", fontFamily: "var(--font-mono)" }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--success)", display: "inline-block", animation: "spin 2s linear infinite" }} />
+              live · refreshes every 10s
+              {lastUpdated && (
+                <span style={{ color: "var(--ink-muted)" }}>
+                  · updated {lastUpdated.toLocaleTimeString()}
+                </span>
+              )}
+            </span>
+          </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
           <label style={{ marginBottom: 0, fontSize: "0.82rem", color: "var(--ink-muted)" }}>Period:</label>

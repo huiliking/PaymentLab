@@ -3,6 +3,10 @@ Payment Lab - Flask API Server
 Handles checkout, payment processing via Stripe, and order management.
 """
 import os
+import sys
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 from flask import Flask, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -14,7 +18,11 @@ def create_app():
     app = Flask(__name__,
                 static_folder='static',
                 static_url_path='')
-    CORS(app, origins=["http://localhost:3000", "http://localhost:5173"])
+    allowed_origins = os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:3000,http://localhost:5173"
+    ).split(",")
+    CORS(app, origins=allowed_origins)
     app.config["STRIPE_SECRET_KEY"] = os.getenv("STRIPE_SECRET_KEY")
     app.config["STRIPE_PUBLISHABLE_KEY"] = os.getenv("STRIPE_PUBLISHABLE_KEY")
 

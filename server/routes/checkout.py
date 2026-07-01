@@ -74,13 +74,14 @@ def record_live_transaction(intent, order_id, locale, billing_country, billing_a
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
         INSERT OR IGNORE INTO transactions
-        (id, stripe_payment_intent, card_last4, card_brand, card_country,
+        (id, merchant_id, stripe_payment_intent, card_last4, card_brand, card_country,
          amount_cents, currency, status, customer_email, customer_name,
          billing_country, billing_postal, shipping_address,
          browser_locale, ip_country, device_fingerprint, created_at, metadata)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         txn_id,
+        "demo_merchant",
         intent.get("id", ""),
         card.get("last4") or "0000",
         card.get("brand") or "unknown",
