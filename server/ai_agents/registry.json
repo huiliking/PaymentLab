@@ -277,7 +277,7 @@
       "input_schema": {
         "type": "object",
         "properties": {
-          "transaction_id": {
+          "txn_id": {
             "type": "string",
             "description": "The transaction ID to investigate (prefix match supported)"
           },
@@ -289,7 +289,7 @@
             "maximum": 2
           }
         },
-        "required": ["transaction_id"]
+        "required": ["txn_id"]
       },
       "references": [
         {

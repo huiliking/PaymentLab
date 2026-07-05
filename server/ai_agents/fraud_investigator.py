@@ -25,11 +25,20 @@ import sqlite3
 import json
 import re
 import os
+import sys
 import uuid
 import requests
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field, asdict
 from typing import Optional
+
+# Ollama's free-text responses can contain arbitrary Unicode (e.g. checkmarks,
+# emoji) that crashes print() on Windows consoles using non-UTF-8 codepages
+# (e.g. GBK). Force UTF-8 regardless of how this module is invoked (CLI,
+# Flask import, or a reused instance across a batch loop).
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 try:
     from graph_result_summarizer import summarize_for_llm
 except ModuleNotFoundError:
@@ -196,18 +205,21 @@ class InvestigationTools:
     def check_locale_consistency(self, txn_id):
         """Check if browser locale, billing country, IP country, and card country are consistent"""
         rows = self._query(
-            "SELECT browser_locale, billing_country, ip_country, card_country, shipping_address FROM transactions WHERE id = ?",
+            "SELECT browser_locale, billing_country, ip_country, card_country, shipping_address, "
+            "customer_email, device_fingerprint FROM transactions WHERE id = ?",
             (txn_id,)
         )
         if not rows:
             return {"tool": "check_locale_consistency", "error": "Transaction not found"}
-        
+
         txn = rows[0]
         locale = txn["browser_locale"] or ""
         billing = txn["billing_country"] or ""
         ip = txn["ip_country"] or ""
         card = txn["card_country"] or ""
         shipping = txn["shipping_address"] or ""
+        email = txn["customer_email"] or ""
+        device_fingerprint = txn["device_fingerprint"] or ""
         
         # Extract country from locale (e.g., "ja-JP" -> "JP")
         locale_country = locale.split("-")[-1].upper() if "-" in locale else ""
@@ -241,24 +253,41 @@ class InvestigationTools:
         if detected_shipping_country and billing and detected_shipping_country != billing:
             mismatches.append(f"Shipping address appears to be in {detected_shipping_country} but billing country is {billing}")
 
-        # Cross-transaction pattern lookup: does this mismatch pattern repeat across the DB?
+        # Cross-transaction pattern lookup: does this SAME identity/ring repeat the
+        # mismatch across merchants? Requires a shared entity (address/email/device) —
+        # matching on country pair alone conflates unrelated fraud rings that happen
+        # to share a common IP/billing combination.
         cross_txn_count = 0
         cross_merchant_count = 0
         pattern_description = ""
         if mismatches and ip and billing and ip != billing:
-            cross_rows = self._query(
-                "SELECT COUNT(*) as cnt, COUNT(DISTINCT merchant_id) as merchants "
-                "FROM transactions WHERE ip_country = ? AND billing_country = ? AND ip_country != billing_country",
-                (ip, billing)
-            )
-            if cross_rows:
-                cross_txn_count = cross_rows[0]["cnt"]
-                cross_merchant_count = cross_rows[0]["merchants"]
-                if cross_txn_count > 1:
-                    pattern_description = (
-                        f"IP={ip}, billing={billing} mismatch seen in "
-                        f"{cross_txn_count} transactions across {cross_merchant_count} merchant(s)"
-                    )
+            shared_conditions = []
+            shared_params = []
+            if shipping:
+                shared_conditions.append("shipping_address = ?")
+                shared_params.append(shipping)
+            if email:
+                shared_conditions.append("customer_email = ?")
+                shared_params.append(email)
+            if device_fingerprint:
+                shared_conditions.append("device_fingerprint = ?")
+                shared_params.append(device_fingerprint)
+
+            if shared_conditions:
+                cross_rows = self._query(
+                    "SELECT COUNT(*) as cnt, COUNT(DISTINCT merchant_id) as merchants "
+                    "FROM transactions WHERE ip_country = ? AND billing_country = ? "
+                    "AND ip_country != billing_country AND (" + " OR ".join(shared_conditions) + ")",
+                    (ip, billing, *shared_params)
+                )
+                if cross_rows:
+                    cross_txn_count = cross_rows[0]["cnt"]
+                    cross_merchant_count = cross_rows[0]["merchants"]
+                    if cross_txn_count > 1:
+                        pattern_description = (
+                            f"Same shipping address/email/device linked to IP={ip}, billing={billing} "
+                            f"mismatch across {cross_txn_count} transactions, {cross_merchant_count} merchant(s)"
+                        )
 
         risk = "HIGH" if len(mismatches) >= 2 else ("MEDIUM" if len(mismatches) == 1 else "LOW")
         if cross_merchant_count >= 2:
@@ -372,18 +401,25 @@ class InvestigationTools:
             "risk": risk
         }
     
-    def check_identity_graph(self, transaction_id: str, hops: int = 2) -> dict:
+    def check_identity_graph(self, txn_id: str = None, transaction_id: str = None, hops: int = 2) -> dict:
         """
         Build an entity relationship graph around the transaction and detect
         fraud rings or synthetic identity clusters.
 
         Args:
-            transaction_id: The transaction to investigate
+            txn_id: The transaction to investigate
+            transaction_id: Accepted alias for txn_id — some LLM tool calls echo
+                this name back from other tools' output fields instead of the
+                registered input schema name
             hops: Graph traversal depth (1 or 2, default 2)
 
         Returns:
             dict with graph structure, cluster stats, risk score, and summary
         """
+        txn_id = txn_id or transaction_id
+        if not txn_id:
+            return {"error": "check_identity_graph requires txn_id"}
+
         db_path = getattr(self, "db_path", None) or os.environ.get(
             "PAYMENTLAB_DB", "server/database/transactions.db"
         )
@@ -391,7 +427,7 @@ class InvestigationTools:
         builder = IdentityGraphBuilder(db_path=db_path)
         builder.MAX_HOPS = max(1, min(hops, 2))  # cap at 2 for performance
 
-        result = builder.build(transaction_id)
+        result = builder.build(txn_id)
 
         return {
             "transaction_id": result.transaction_id,
@@ -417,6 +453,7 @@ class InvestigationTools:
                 "fraud_ring_detected": result.fraud_ring_detected,
                 "synthetic_identity_signals": result.synthetic_identity_signals,
             },
+            "geographic_profile": result.geographic_profile,
             "summary": result.summary,
         }
 
@@ -517,6 +554,20 @@ class RuleEngine:
                     "risk": "MEDIUM",
                     "detail": f"Billing country {billing} unusual for {currency.upper()} payment"
                 })
+
+        # Rule 8: Currency hopping — same card, multiple currencies, short window
+        cutoff_hop = (datetime.now() - timedelta(hours=48)).isoformat() + "Z"
+        card_txns = self.tools._query(
+            "SELECT DISTINCT currency FROM transactions WHERE card_last4 = ? AND created_at > ?",
+            (txn["card_last4"], cutoff_hop)
+        )
+        distinct_currencies = {r["currency"] for r in card_txns}
+        if len(distinct_currencies) >= 3:
+            triggers.append({
+                "rule": "CURRENCY_HOPPING",
+                "risk": "HIGH",
+                "detail": f"Card used in {len(distinct_currencies)} currencies within 6h: {', '.join(sorted(distinct_currencies))}"
+            })
 
         return triggers
 
@@ -707,6 +758,16 @@ class FraudInvestigator:
             tool_name = plan.get("tool")
             tool_params = plan.get("params", {})
 
+            # check_identity_graph only ever makes sense against the transaction
+            # under investigation. Ollama's free-text PARAMS parsing sometimes
+            # drops the id param entirely (no "key=value" match) or uses an
+            # unexpected name — default to the current transaction rather than
+            # erroring out on a call that has only one sensible target anyway.
+            if tool_name == "check_identity_graph" and not (
+                tool_params.get("txn_id") or tool_params.get("transaction_id")
+            ):
+                tool_params["txn_id"] = context["transaction"].get("id")
+
             call_key = f"{tool_name}:{json.dumps(tool_params, sort_keys=True, default=str)}"
             if call_key in {
                 f"{e['tool']}:{json.dumps(e['params'], sort_keys=True, default=str)}"
@@ -761,7 +822,7 @@ class FraudInvestigator:
                 print(f"  [ESCALATE] Address reused by {tool_result['unique_cards']} cards "
                       f"→ auto-calling check_identity_graph")
                 graph_result = self.registry.execute(
-                    "check_identity_graph", {"transaction_id": txn_id}, self.tools
+                    "check_identity_graph", {"txn_id": txn_id}, self.tools
                 )
                 report.tool_results["check_identity_graph"] = graph_result
                 context["tools_called"].append("check_identity_graph")
@@ -783,6 +844,32 @@ class FraudInvestigator:
                 if graph_evidence:
                     report.evidence.append(graph_evidence)
                     print(f"  [EVIDENCE] {graph_evidence.risk_signal}: {graph_evidence.finding}")
+
+        # ── Mandatory fallback: always run identity graph if Ollama skipped it ──
+        if "check_identity_graph" not in context["tools_called"]:
+            txn_id = context["transaction"].get("id", "")
+            print(f"  [FALLBACK] Ollama never called check_identity_graph → auto-calling")
+            graph_result = self.registry.execute(
+                "check_identity_graph", {"txn_id": txn_id}, self.tools
+            )
+            report.tool_results["check_identity_graph"] = graph_result
+            context["tools_called"].append("check_identity_graph")
+            context["evidence_gathered"].append({
+                "tool": "check_identity_graph",
+                "params": {"txn_id": txn_id},
+                "result": graph_result
+            })
+            step_count += 1
+            report.steps.append(InvestigationStep(
+                step_number=step_count, phase="GATHER",
+                action="Auto-called check_identity_graph (mandatory fallback)",
+                result=json.dumps(graph_result, default=str)[:500],
+                tool_used="check_identity_graph"
+            ))
+            graph_evidence = self._extract_evidence("check_identity_graph", graph_result)
+            if graph_evidence:
+                report.evidence.append(graph_evidence)
+                print(f"  [EVIDENCE] {graph_evidence.risk_signal}: {graph_evidence.finding}")
 
         print(f"\n[FINAL] Generating Ollama verdict...")
         verdict = self._llm_verdict(context)
@@ -1504,16 +1591,18 @@ SUMMARY: <2-3 sentence explanation of your conclusion, referencing specific evid
             
             cursor.execute("""
                 INSERT OR REPLACE INTO investigation_reports
-                (id, transaction_id, risk_level, verdict, summary, evidence, steps, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, transaction_id, risk_level, verdict, confidence, summary, evidence, steps, tool_results, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 gen_id(),
                 report.transaction_id,
                 report.risk_level,
                 report.verdict,
+                report.confidence,
                 report.summary,
                 json.dumps([asdict(e) if isinstance(e, Evidence) else e for e in report.evidence], default=str),
                 json.dumps([asdict(s) if isinstance(s, InvestigationStep) else s for s in report.steps], default=str),
+                json.dumps(report.tool_results, default=str) if report.tool_results else None,
                 report.created_at
             ))
             

@@ -11,6 +11,7 @@ Add to your existing PaymentLab server:
 from flask import Blueprint, request, jsonify, current_app
 import sys
 import os
+import threading
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -43,6 +44,11 @@ if not os.path.exists(REGISTRY_PATH):
     REGISTRY_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ai_agents", "registry.json")
 
 tool_registry = ToolRegistry(REGISTRY_PATH)
+
+# Serializes investigations: Ollama and sqlite writes aren't safe under
+# concurrent investigate() calls, so only one runs at a time per process.
+_investigation_lock = threading.Lock()
+_investigation_state = {"txn_id": None}
 
 
 @fraud_bp.route('/fraud/transactions', methods=['GET'])
@@ -100,23 +106,34 @@ def get_flagged():
 @fraud_bp.route('/fraud/investigate/<txn_id>', methods=['POST'])
 def investigate_transaction(txn_id):
     """Run full FAA-style investigation on a transaction"""
-    metering_service = current_app.config.get('METERING_SERVICE')
+    if not _investigation_lock.acquire(blocking=False):
+        return jsonify({
+            "error": "An investigation is already in progress",
+            "in_progress_txn_id": _investigation_state["txn_id"],
+        }), 409
 
-    investigator = FraudInvestigator(
-        db_path=DB_PATH,
-        ollama_url=OLLAMA_URL,
-        model=OLLAMA_MODEL,
-        registry_path=REGISTRY_PATH,
-        metering_service=metering_service,
-    )
-    
     try:
-        report = investigator.investigate(txn_id)
-        return jsonify(report.to_dict())
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        _investigation_state["txn_id"] = txn_id
+        metering_service = current_app.config.get('METERING_SERVICE')
+
+        investigator = FraudInvestigator(
+            db_path=DB_PATH,
+            ollama_url=OLLAMA_URL,
+            model=OLLAMA_MODEL,
+            registry_path=REGISTRY_PATH,
+            metering_service=metering_service,
+        )
+
+        try:
+            report = investigator.investigate(txn_id)
+            return jsonify(report.to_dict())
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return jsonify({"error": str(e)}), 500
+    finally:
+        _investigation_state["txn_id"] = None
+        _investigation_lock.release()
 
 
 @fraud_bp.route('/fraud/pre-screen/<txn_id>', methods=['GET'])
@@ -140,10 +157,18 @@ def get_reports():
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
+    # Only the latest report per transaction — a transaction can be
+    # re-investigated multiple times, and the frontend indexes this list by
+    # transaction_id, so stale duplicate rows would silently overwrite the
+    # current report.
     cursor.execute("""
         SELECT r.*, t.card_last4, t.amount_cents, t.currency, t.customer_email
         FROM investigation_reports r
         LEFT JOIN transactions t ON r.transaction_id = t.id
+        WHERE r.created_at = (
+            SELECT MAX(r2.created_at) FROM investigation_reports r2
+            WHERE r2.transaction_id = r.transaction_id
+        )
         ORDER BY r.created_at DESC
     """)
     rows = [dict(row) for row in cursor.fetchall()]
@@ -151,13 +176,13 @@ def get_reports():
     
     # Parse JSON fields
     for row in rows:
-        for field in ["evidence", "steps"]:
+        for field in ["evidence", "steps", "tool_results"]:
             if row.get(field):
                 try:
                     row[field] = json.loads(row[field])
                 except:
                     pass
-    
+
     return jsonify({"reports": rows, "count": len(rows)})
 
 
@@ -186,13 +211,13 @@ def get_report(txn_id):
         return jsonify({"error": "Report not found"}), 404
     
     result = dict(row)
-    for field in ["evidence", "steps"]:
+    for field in ["evidence", "steps", "tool_results"]:
         if result.get(field):
             try:
                 result[field] = json.loads(result[field])
             except:
                 pass
-    
+
     return jsonify(result)
 
 
@@ -216,11 +241,24 @@ def get_stats():
     cursor.execute("SELECT status, COUNT(*) as count FROM transactions GROUP BY status")
     status_breakdown = {row["status"]: row["count"] for row in cursor.fetchall()}
     
-    # Investigation reports
-    cursor.execute("SELECT COUNT(*) as count FROM investigation_reports")
+    # Investigation reports — count distinct transactions, using only the latest
+    # report per transaction (a transaction can be re-investigated multiple
+    # times; earlier attempts shouldn't inflate these counts).
+    cursor.execute("""
+        SELECT COUNT(*) as count FROM (
+            SELECT transaction_id FROM investigation_reports GROUP BY transaction_id
+        )
+    """)
     total_reports = cursor.fetchone()["count"]
-    
-    cursor.execute("SELECT verdict, COUNT(*) as count FROM investigation_reports GROUP BY verdict")
+
+    cursor.execute("""
+        SELECT verdict, COUNT(*) as count FROM investigation_reports ir
+        WHERE ir.created_at = (
+            SELECT MAX(ir2.created_at) FROM investigation_reports ir2
+            WHERE ir2.transaction_id = ir.transaction_id
+        )
+        GROUP BY verdict
+    """)
     verdict_breakdown = {row["verdict"]: row["count"] for row in cursor.fetchall()}
     
     conn.close()

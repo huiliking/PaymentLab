@@ -73,9 +73,11 @@ def init_db():
             transaction_id TEXT,
             risk_level TEXT,
             verdict TEXT,
+            confidence REAL,
             summary TEXT,
             evidence TEXT,
             steps TEXT,
+            tool_results TEXT,
             created_at TEXT,
             FOREIGN KEY (transaction_id) REFERENCES transactions(id)
         );
@@ -85,6 +87,14 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_txn_status ON transactions(status);
         CREATE INDEX IF NOT EXISTS idx_txn_merchant ON transactions(merchant_id);
     """)
+    # Migrate: add columns if missing (existing DBs won't have them)
+    cols = [row[1] for row in conn.execute("PRAGMA table_info(investigation_reports)").fetchall()]
+    if "tool_results" not in cols:
+        conn.execute("ALTER TABLE investigation_reports ADD COLUMN tool_results TEXT")
+        conn.commit()
+    if "confidence" not in cols:
+        conn.execute("ALTER TABLE investigation_reports ADD COLUMN confidence REAL")
+        conn.commit()
     count = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
     if count == 0:
         conn.close()

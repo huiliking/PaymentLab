@@ -123,21 +123,21 @@ function TransactionRow({ item, onInvestigate, investigating, report }) {
           )}
           <button
             onClick={() => onInvestigate(txn.id)}
-            disabled={investigating === txn.id}
+            disabled={investigating !== null}
             style={{
               padding: "8px 16px",
               borderRadius: 6,
               border: "none",
-              background: investigating === txn.id ? "var(--border)" : "var(--accent)",
-              color: investigating === txn.id ? "var(--text-muted)" : "#fff",
+              background: investigating !== null ? "var(--border)" : "var(--accent)",
+              color: investigating !== null ? "var(--text-muted)" : "#fff",
               fontSize: 12,
               fontWeight: 600,
-              cursor: investigating === txn.id ? "not-allowed" : "pointer",
+              cursor: investigating !== null ? "not-allowed" : "pointer",
               fontFamily: "'JetBrains Mono', monospace",
               minWidth: 100,
             }}
           >
-            {investigating === txn.id ? "⏳ Working..." : report ? "Re-investigate" : "🔍 Investigate"}
+            {investigating === txn.id ? "⏳ Working..." : investigating !== null ? "Busy" : report ? "Re-investigate" : "🔍 Investigate"}
           </button>
         </div>
       </div>
@@ -213,7 +213,7 @@ function ReportPanel({ report, onClose }) {
             <div>
               <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 1 }}>Confidence</div>
               <div style={{ fontSize: 22, fontWeight: 700, color: RISK_COLORS[report.risk_level]?.text }}>
-                {(report.confidence * 100).toFixed(0)}%
+                {((report.confidence || 0) * 100).toFixed(0)}%
               </div>
             </div>
           </div>
@@ -378,9 +378,15 @@ export default function FraudDashboard() {
 
   // Run investigation
   const handleInvestigate = async (txnId) => {
+    if (investigating !== null) return; // guard against races on the disabled state
     setInvestigating(txnId);
     try {
       const res = await fetch(`/api/fraud/investigate/${txnId}`, { method: "POST" });
+      if (res.status === 409) {
+        const conflict = await res.json();
+        alert(`Investigation already in progress for ${conflict.in_progress_txn_id}. Please wait for it to finish.`);
+        return;
+      }
       const report = await res.json();
       setReports(prev => ({ ...prev, [txnId]: report }));
       setSelectedReport(report);

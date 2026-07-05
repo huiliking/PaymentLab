@@ -24,7 +24,10 @@ from datetime import datetime
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-FRAUD_LABELS = {"velocity_burst", "card_testing", "address_reuse", "geo_mismatch", "currency_hopping"}
+FRAUD_LABELS = {
+    "velocity_burst", "card_testing", "address_reuse", "geo_mismatch", "currency_hopping",
+    "cross_merchant_drop", "cross_merchant_card_test", "cross_border_reshipping",
+}
 DEFAULT_DB   = os.path.join(os.path.dirname(__file__), "payment_lab.db")
 
 LABEL_DISPLAY = {
@@ -32,8 +35,11 @@ LABEL_DISPLAY = {
     "card_testing":     "Card Testing",
     "address_reuse":    "Address Reuse",
     "geo_mismatch":     "Geo Mismatch",
-    "currency_hopping": "Currency Hopping",
-    "__legitimate__":   "Legitimate (no fraud)",
+    "currency_hopping":          "Currency Hopping",
+    "cross_merchant_drop":       "Cross-Merchant Drop Address",
+    "cross_merchant_card_test":  "Cross-Merchant Card Testing",
+    "cross_border_reshipping":   "Cross-Border Reshipping Ring",
+    "__legitimate__":            "Legitimate (no fraud)",
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -41,6 +47,8 @@ LABEL_DISPLAY = {
 def load_data(db_path: str, suspicious_as: str) -> list[dict]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    # Some transactions get investigated more than once (manual re-runs during
+    # validation); only the latest report per transaction counts toward accuracy.
     rows = conn.execute("""
         SELECT
             t.id                                          AS txn_id,
@@ -50,6 +58,10 @@ def load_data(db_path: str, suspicious_as: str) -> list[dict]:
             ir.created_at                                AS investigated_at
         FROM investigation_reports ir
         JOIN transactions t ON t.id = ir.transaction_id
+        WHERE ir.created_at = (
+            SELECT MAX(ir2.created_at) FROM investigation_reports ir2
+            WHERE ir2.transaction_id = ir.transaction_id
+        )
         ORDER BY t.id
     """).fetchall()
     conn.close()

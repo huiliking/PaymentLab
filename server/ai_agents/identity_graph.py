@@ -413,13 +413,13 @@ def _build_summary(r: IdentityGraphResult) -> str:
 # Paste this into the InvestigationTools class in fraud_investigator.py
 # ---------------------------------------------------------------------------
 
-def check_identity_graph(self, transaction_id: str, hops: int = 2) -> dict:
+def check_identity_graph(self, txn_id: str, hops: int = 2) -> dict:
     """
     Build an entity relationship graph around the transaction and detect
     fraud rings or synthetic identity clusters.
 
     Args:
-        transaction_id: The transaction to investigate
+        txn_id: The transaction to investigate
         hops: Graph traversal depth (1 or 2, default 2)
 
     Returns:
@@ -432,7 +432,7 @@ def check_identity_graph(self, transaction_id: str, hops: int = 2) -> dict:
     builder = IdentityGraphBuilder(db_path=db_path)
     builder.MAX_HOPS = max(1, min(hops, 2))  # cap at 2 for performance
 
-    result = builder.build(transaction_id)
+    result = builder.build(txn_id)
 
     return {
         "transaction_id": result.transaction_id,

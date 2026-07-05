@@ -188,6 +188,72 @@ function ClusterStats({ cluster, risk }) {
   );
 }
 
+// ─── Geographic Profile ──────────────────────────────────────────────────────
+function GeographicProfile({ geo }) {
+  if (!geo || Object.keys(geo).length === 0) return null;
+  const coherence = geo.coherence_score ?? 1.0;
+  const coherenceColor = coherence >= 0.7 ? COLORS.riskLow : coherence >= 0.4 ? COLORS.riskMed : COLORS.riskHigh;
+
+  const countryGroups = [
+    { label: "Card issuing", values: geo.card_issuing_countries || [] },
+    { label: "Billing",      values: geo.billing_countries || [] },
+    { label: "IP",           values: geo.ip_countries || [] },
+  ].filter(g => g.values.length > 0);
+
+  return (
+    <div style={{
+      padding: "10px 14px", background: COLORS.surface,
+      borderTop: `1px solid ${COLORS.border}`, borderBottom: `1px solid ${COLORS.border}`,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <span style={{
+          fontSize: 11, fontWeight: 700, color: COLORS.textDim,
+          textTransform: "uppercase", letterSpacing: "0.05em",
+        }}>Geographic Profile</span>
+        {geo.merchant_count >= 2 && (
+          <span style={{
+            fontSize: 10, fontWeight: 700, color: COLORS.riskMed,
+            background: COLORS.riskMed + "22", padding: "2px 8px", borderRadius: 3,
+          }}>
+            Spans {geo.merchant_count} merchants
+          </span>
+        )}
+      </div>
+
+      {countryGroups.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 10 }}>
+          {countryGroups.map(g => (
+            <div key={g.label} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 10, color: COLORS.textDim }}>{g.label}:</span>
+              {g.values.map(c => (
+                <span key={c} style={{
+                  fontSize: 10, fontWeight: 600, color: COLORS.text,
+                  background: COLORS.muted, padding: "2px 6px", borderRadius: 3,
+                }}>{c}</span>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 10, color: COLORS.textDim, minWidth: 130 }}>
+          Coherence ({geo.total_unique_countries ?? 1} countries)
+        </span>
+        <div style={{ flex: "0 1 160px", height: 6, background: COLORS.muted, borderRadius: 3 }}>
+          <div style={{
+            width: `${coherence * 100}%`, height: "100%",
+            background: coherenceColor, borderRadius: 3,
+          }} />
+        </div>
+        <span style={{ fontSize: 11, fontWeight: 700, color: coherenceColor }}>
+          {(coherence * 100).toFixed(0)}%
+        </span>
+      </div>
+    </div>
+  );
+}
+
 // ─── Signals ─────────────────────────────────────────────────────────────────
 function Signals({ signals, riskLabel, riskScore }) {
   if (!signals || signals.length === 0) return null;
@@ -483,7 +549,15 @@ export default function IdentityGraphPanel({ graphData, compact = false }) {
     );
   }
 
-  const { graph, cluster, risk, seed_entities, transaction_id } = graphData;
+  if (graphData.error) {
+    return (
+      <div style={{ padding: 20, color: "#f85149", fontSize: 13 }}>
+        Identity graph tool call failed: {graphData.error}
+      </div>
+    );
+  }
+
+  const { graph, cluster, risk, seed_entities, transaction_id, geographic_profile } = graphData;
   const allNodes = graph?.nodes || [];
   const allEdges = graph?.edges || [];
 
@@ -549,6 +623,9 @@ export default function IdentityGraphPanel({ graphData, compact = false }) {
 
       {/* Cluster stats */}
       {cluster && risk && <ClusterStats cluster={cluster} risk={risk} />}
+
+      {/* Geographic profile */}
+      <GeographicProfile geo={geographic_profile} />
 
       {/* Filter bar */}
       <FilterBar filters={filters} setFilters={setFilters} nodeCounts={nodeCounts} />
