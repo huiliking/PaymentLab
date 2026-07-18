@@ -15,9 +15,16 @@ from routes.metering import metering_bp, init_metering_routes
 load_dotenv()
 
 def create_app():
+    # static_url_path is intentionally NOT '' (matching the SPA catch-all
+    # route's pattern below would make Flask's own auto-registered static
+    # route win every routing tie, since it's added first — it 404s
+    # immediately on any path with no matching file, e.g. /tools or /fraud,
+    # instead of falling through to the catch-all's serve-index.html logic).
+    # The catch-all route already serves real static files manually via
+    # os.path.isfile()/send_from_directory(), so this prefix is unused.
     app = Flask(__name__,
                 static_folder='static',
-                static_url_path='')
+                static_url_path='/__flask_static__')
     allowed_origins = os.getenv(
         "ALLOWED_ORIGINS",
         "http://localhost:3000,http://localhost:5173"

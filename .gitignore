@@ -18,6 +18,9 @@ node_modules/
 dist/
 .DS_Store
 
+# Build output copied into server/static by build.sh — regenerated on every deploy
+server/static/
+
 # IDE
 .vscode/
 .idea/
