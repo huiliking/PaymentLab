@@ -70,7 +70,7 @@
       "status": "active",
       "source": "builtin",
       "description": "Get full details of a specific transaction including amount, card, email, billing/shipping address, locale, and timestamps.",
-      "detects": "Provides baseline context — amount, card, email, billing, shipping, locale, IP, device fingerprint",
+      "detects": "Provides baseline context \u2014 amount, card, email, billing, shipping, locale, IP, device fingerprint",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -79,13 +79,15 @@
             "description": "Transaction ID to look up"
           }
         },
-        "required": ["txn_id"]
+        "required": [
+          "txn_id"
+        ]
       },
       "references": [
         {
           "name": "FAA Framework",
           "url": "https://arxiv.org/abs/2506.11635",
-          "relevance": "Iterative Plan→Gather→Analyze investigation loop requires transaction context as the starting point"
+          "relevance": "Iterative Plan\u2192Gather\u2192Analyze investigation loop requires transaction context as the starting point"
         }
       ]
     },
@@ -95,7 +97,7 @@
       "status": "candidate",
       "source": "builtin",
       "description": "Flag unusual transaction amounts based on customer history, merchant average, and product category norms.",
-      "detects": "Unusually large/small amounts, round-number fraud, amount escalation patterns (card testing → large purchase)",
+      "detects": "Unusually large/small amounts, round-number fraud, amount escalation patterns (card testing \u2192 large purchase)",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -104,11 +106,13 @@
             "description": "Transaction ID"
           }
         },
-        "required": ["txn_id"]
+        "required": [
+          "txn_id"
+        ]
       },
       "references": [
         {
-          "name": "Luo et al. — LLM+GCN Fraud Detection",
+          "name": "Luo et al. \u2014 LLM+GCN Fraud Detection",
           "url": "https://arxiv.org/abs/2509.09928",
           "relevance": "Most fraud is under $250; amount alone is not a signal, but anomaly relative to history is"
         }
@@ -130,7 +134,9 @@
             "description": "Transaction ID"
           }
         },
-        "required": ["txn_id"]
+        "required": [
+          "txn_id"
+        ]
       },
       "references": [
         {
@@ -151,7 +157,7 @@
       "status": "active",
       "source": "builtin",
       "description": "Get transaction history for an email address. Use to detect account patterns, multi-card usage, and synthetic identities.",
-      "detects": "Synthetic identities, account takeover — one email across many cards or vice versa",
+      "detects": "Synthetic identities, account takeover \u2014 one email across many cards or vice versa",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -160,11 +166,13 @@
             "description": "Customer email address"
           }
         },
-        "required": ["email"]
+        "required": [
+          "email"
+        ]
       },
       "references": [
         {
-          "name": "Luo et al. — LLM+GCN Fraud Detection",
+          "name": "Luo et al. \u2014 LLM+GCN Fraud Detection",
           "url": "https://arxiv.org/abs/2509.09928",
           "relevance": "Email-to-card graph linkage is a key signal for fraud ring detection"
         }
@@ -190,7 +198,9 @@
             "default": 48
           }
         },
-        "required": ["device_id"]
+        "required": [
+          "device_id"
+        ]
       },
       "references": [
         {
@@ -216,11 +226,13 @@
             "description": "Email address to check"
           }
         },
-        "required": ["email"]
+        "required": [
+          "email"
+        ]
       },
       "references": [
         {
-          "name": "Investigation 2 — Card Testing (PaymentLab)",
+          "name": "Investigation 2 \u2014 Card Testing (PaymentLab)",
           "url": "https://github.com/huiliking/PaymentLab",
           "relevance": "Yopmail disposable email was a key fraud signal in the card testing investigation"
         },
@@ -251,7 +263,9 @@
             "description": "Expected country from billing address"
           }
         },
-        "required": ["phone"]
+        "required": [
+          "phone"
+        ]
       },
       "references": [
         {
@@ -289,16 +303,18 @@
             "maximum": 2
           }
         },
-        "required": ["txn_id"]
+        "required": [
+          "txn_id"
+        ]
       },
       "references": [
         {
-          "label": "Luo et al. — LLM+GCN Fraud Detection",
+          "label": "Luo et al. \u2014 LLM+GCN Fraud Detection",
           "url": "https://arxiv.org/abs/2509.09928",
           "note": "Key insight: fraud signals emerge from relationships, not just individual features. GCN aggregates neighborhood embeddings; we approximate with BFS traversal + cluster scoring."
         },
         {
-          "label": "FAA Framework — Plan→Gather→Analyze",
+          "label": "FAA Framework \u2014 Plan\u2192Gather\u2192Analyze",
           "url": "https://arxiv.org/abs/2506.11635",
           "note": "Graph tool fits into the Gather phase; Claude reasons over the graph structure in the Analyze phase."
         },
@@ -308,9 +324,9 @@
           "note": "Synthetic identity fraud is fastest-growing vector; graph-based detection is recommended approach."
         },
         {
-          "label": "Investigation 1 — Shibuya Drop Address",
+          "label": "Investigation 1 \u2014 Shibuya Drop Address",
           "url": "internal",
-          "note": "1-2-3 Shibuya address shared by 14 cards + 10 emails — exact pattern this tool is designed to catch."
+          "note": "1-2-3 Shibuya address shared by 14 cards + 10 emails \u2014 exact pattern this tool is designed to catch."
         }
       ]
     },
@@ -334,7 +350,9 @@
             "default": 24
           }
         },
-        "required": ["card_last4"]
+        "required": [
+          "card_last4"
+        ]
       },
       "references": [
         {
@@ -364,7 +382,9 @@
             "default": 1
           }
         },
-        "required": ["card_last4"]
+        "required": [
+          "card_last4"
+        ]
       },
       "references": [
         {
@@ -373,9 +393,9 @@
           "relevance": "Rate limiting and velocity checks are core API security controls"
         },
         {
-          "name": "Investigation 2 — Card Testing (PaymentLab)",
+          "name": "Investigation 2 \u2014 Card Testing (PaymentLab)",
           "url": "https://github.com/huiliking/PaymentLab",
-          "relevance": "Amount escalation $15→$99 detected via velocity analysis"
+          "relevance": "Amount escalation $15\u2192$99 detected via velocity analysis"
         }
       ]
     },
@@ -399,7 +419,9 @@
             "description": "First 6-8 digits of card (BIN/IIN)"
           }
         },
-        "required": ["card_last4"]
+        "required": [
+          "card_last4"
+        ]
       },
       "references": [
         {
@@ -414,7 +436,7 @@
       "category": "card_velocity",
       "status": "candidate",
       "source": "builtin",
-      "description": "Detect card testing patterns: small→large amount escalation, multiple declines followed by success, rapid sequential attempts.",
+      "description": "Detect card testing patterns: small\u2192large amount escalation, multiple declines followed by success, rapid sequential attempts.",
       "detects": "Card testing attacks, BIN brute-forcing, stolen card validation before high-value fraud",
       "input_schema": {
         "type": "object",
@@ -429,13 +451,15 @@
             "default": 24
           }
         },
-        "required": ["card_last4"]
+        "required": [
+          "card_last4"
+        ]
       },
       "references": [
         {
-          "name": "Investigation 2 — Card Testing (PaymentLab)",
+          "name": "Investigation 2 \u2014 Card Testing (PaymentLab)",
           "url": "https://github.com/huiliking/PaymentLab",
-          "relevance": "Detected $15→$99 escalation pattern in real investigation"
+          "relevance": "Detected $15\u2192$99 escalation pattern in real investigation"
         },
         {
           "name": "EPC 2025 Payment Threats Report",
@@ -459,11 +483,13 @@
             "description": "Transaction ID"
           }
         },
-        "required": ["txn_id"]
+        "required": [
+          "txn_id"
+        ]
       },
       "references": [
         {
-          "name": "PaymentLab — RAG Address Form",
+          "name": "PaymentLab \u2014 RAG Address Form",
           "url": "https://github.com/huiliking/PaymentLab",
           "relevance": "Locale signals (browser language, address format) are captured during checkout and available for consistency checks"
         },
@@ -489,13 +515,15 @@
             "description": "IP address to check"
           }
         },
-        "required": ["ip_address"]
+        "required": [
+          "ip_address"
+        ]
       },
       "references": [
         {
-          "name": "Investigation 2 — Card Testing (PaymentLab)",
+          "name": "Investigation 2 \u2014 Card Testing (PaymentLab)",
           "url": "https://github.com/huiliking/PaymentLab",
-          "relevance": "IP geolocation mismatch (US→JP) in 11 minutes was a key fraud signal"
+          "relevance": "IP geolocation mismatch (US\u2192JP) in 11 minutes was a key fraud signal"
         }
       ]
     },
@@ -515,7 +543,9 @@
             "description": "IP address to geolocate"
           }
         },
-        "required": ["ip_address"]
+        "required": [
+          "ip_address"
+        ]
       },
       "references": [
         {
@@ -531,7 +561,7 @@
       "status": "candidate",
       "source": "builtin",
       "description": "Check if a human could physically travel between two transaction locations within the time gap. Uses haversine distance and realistic travel speeds.",
-      "detects": "Impossible travel — e.g., transactions in New York and Tokyo 11 minutes apart",
+      "detects": "Impossible travel \u2014 e.g., transactions in New York and Tokyo 11 minutes apart",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -548,16 +578,20 @@
             "description": "Minutes between the two transactions"
           }
         },
-        "required": ["location_a", "location_b", "time_gap_minutes"]
+        "required": [
+          "location_a",
+          "location_b",
+          "time_gap_minutes"
+        ]
       },
       "references": [
         {
-          "name": "Investigation 2 — Card Testing (PaymentLab)",
+          "name": "Investigation 2 \u2014 Card Testing (PaymentLab)",
           "url": "https://github.com/huiliking/PaymentLab",
-          "relevance": "US→JP in 11 minutes was physically impossible, confirming fraud"
+          "relevance": "US\u2192JP in 11 minutes was physically impossible, confirming fraud"
         },
         {
-          "name": "Taktile — Risk Decisioning",
+          "name": "Taktile \u2014 Risk Decisioning",
           "url": "https://www.taktile.com/",
           "relevance": "Impossible travel is a standard feature in commercial fraud decisioning platforms"
         }
@@ -568,8 +602,8 @@
       "category": "address_shipping",
       "status": "active",
       "source": "builtin",
-      "description": "Find all transactions shipped to a given address. Use to detect address reuse across cards and emails — a key drop address signal.",
-      "detects": "Drop addresses, reshipping fraud — multiple cards/emails shipping to same location",
+      "description": "Find all transactions shipped to a given address. Use to detect address reuse across cards and emails \u2014 a key drop address signal.",
+      "detects": "Drop addresses, reshipping fraud \u2014 multiple cards/emails shipping to same location",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -578,13 +612,15 @@
             "description": "Shipping address to look up"
           }
         },
-        "required": ["address"]
+        "required": [
+          "address"
+        ]
       },
       "references": [
         {
-          "name": "Investigation 1 — Drop Address (PaymentLab)",
+          "name": "Investigation 1 \u2014 Drop Address (PaymentLab)",
           "url": "https://github.com/huiliking/PaymentLab",
-          "relevance": "Shipping address used by 14 cards + 10 emails — classic drop address pattern"
+          "relevance": "Shipping address used by 14 cards + 10 emails \u2014 classic drop address pattern"
         },
         {
           "name": "EBA/ECB 2025 Joint Report on Payment Fraud",
@@ -609,7 +645,9 @@
             "description": "Transaction ID"
           }
         },
-        "required": ["txn_id"]
+        "required": [
+          "txn_id"
+        ]
       },
       "references": [
         {
@@ -639,11 +677,13 @@
             "description": "Country code (e.g., US, CA, GB)"
           }
         },
-        "required": ["address"]
+        "required": [
+          "address"
+        ]
       },
       "references": [
         {
-          "name": "Investigation 2 — Card Testing (PaymentLab)",
+          "name": "Investigation 2 \u2014 Card Testing (PaymentLab)",
           "url": "https://github.com/huiliking/PaymentLab",
           "relevance": "Fake address was a key fraud signal alongside disposable email"
         },
@@ -674,11 +714,13 @@
             "default": 5
           }
         },
-        "required": ["address"]
+        "required": [
+          "address"
+        ]
       },
       "references": [
         {
-          "name": "Investigation 1 — Drop Address (PaymentLab)",
+          "name": "Investigation 1 \u2014 Drop Address (PaymentLab)",
           "url": "https://github.com/huiliking/PaymentLab",
           "relevance": "14 cards + 10 emails at one address = textbook reshipping pattern"
         },
@@ -756,7 +798,7 @@
           "relevance": "Friendly fraud / chargeback abuse is the #1 first-party fraud type"
         },
         {
-          "name": "Kount — Chargeback Protection",
+          "name": "Kount \u2014 Chargeback Protection",
           "url": "https://kount.com/",
           "relevance": "Commercial platforms dedicate entire modules to chargeback pattern analysis"
         }
@@ -777,7 +819,9 @@
             "description": "Customer email (used as account identifier)"
           }
         },
-        "required": ["email"]
+        "required": [
+          "email"
+        ]
       },
       "references": [
         {
@@ -802,7 +846,9 @@
             "description": "Session ID from the checkout"
           }
         },
-        "required": ["session_id"]
+        "required": [
+          "session_id"
+        ]
       },
       "references": [
         {
@@ -832,7 +878,9 @@
             "description": "Merchant ID or name"
           }
         },
-        "required": ["merchant_id"]
+        "required": [
+          "merchant_id"
+        ]
       },
       "references": [
         {
@@ -867,7 +915,9 @@
             "default": 30
           }
         },
-        "required": ["merchant_id"]
+        "required": [
+          "merchant_id"
+        ]
       },
       "references": [
         {
@@ -897,7 +947,9 @@
             "description": "Customer country code"
           }
         },
-        "required": ["name"]
+        "required": [
+          "name"
+        ]
       },
       "references": [
         {
@@ -928,7 +980,9 @@
             "description": "Customer name to screen"
           }
         },
-        "required": ["name"]
+        "required": [
+          "name"
+        ]
       },
       "references": [
         {
@@ -958,7 +1012,9 @@
             "description": "Customer country code"
           }
         },
-        "required": ["name"]
+        "required": [
+          "name"
+        ]
       },
       "references": [
         {
@@ -984,7 +1040,9 @@
             "description": "Email address to check against breach databases"
           }
         },
-        "required": ["email"]
+        "required": [
+          "email"
+        ]
       },
       "references": [
         {
@@ -996,6 +1054,230 @@
           "name": "EBA/ECB 2025 Joint Report on Payment Fraud",
           "url": "https://www.eba.europa.eu/",
           "relevance": "Credential stuffing from breach data is a top account takeover vector"
+        }
+      ]
+    },
+    {
+      "name": "social_engineering_attack",
+      "category": "behavioral_account",
+      "status": "candidate",
+      "source": "external",
+      "source_detail": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+      "description": "Checks for suspicious communication impersonation attempts",
+      "detects": "Fraudsters using AI-tools to generate realistic-looking phishing and spear-phishing emails or deepfakes",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "txn_id": {
+            "type": "string",
+            "description": "Transaction ID"
+          }
+        },
+        "required": [
+          "txn_id"
+        ]
+      },
+      "references": [
+        {
+          "name": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+          "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
+          "relevance": "AI-tools enable fraudsters to generate voice and video impersonating well-known persons"
+        }
+      ]
+    },
+    {
+      "name": "malware_infection",
+      "category": "external_intel",
+      "status": "proposed",
+      "source": "external",
+      "source_detail": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+      "description": "Checks for malware infections on devices",
+      "detects": "Malware in its various forms, including ransomware, remains a major threat",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "txn_id": {
+            "type": "string",
+            "description": "Transaction ID"
+          }
+        },
+        "required": [
+          "txn_id"
+        ]
+      },
+      "references": [
+        {
+          "name": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+          "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
+          "relevance": "Measures against malware include proper maintenance of own devices"
+        }
+      ]
+    },
+    {
+      "name": "apt_attack",
+      "category": "transaction_context",
+      "status": "candidate",
+      "source": "external",
+      "source_detail": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+      "description": "Checks for Advanced Persistent Threat (APT) attacks on payment infrastructures",
+      "detects": "Advanced Persistent Threat (APT) is presently one of the most sophisticated and lucrative types of attacks",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "txn_id": {
+            "type": "string",
+            "description": "Transaction ID"
+          }
+        },
+        "required": [
+          "txn_id"
+        ]
+      },
+      "references": [
+        {
+          "name": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+          "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
+          "relevance": "Measures against APTs should start with security defence-in-depth strategy"
+        }
+      ]
+    },
+    {
+      "name": "ddos_attack",
+      "category": "transaction_context",
+      "status": "proposed",
+      "source": "external",
+      "source_detail": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+      "description": "Checks for Distributed Denial of Service (DDoS) attacks on financial sector targets",
+      "detects": "DDoS attacks on the financial sector have increased in both volume and sophistication",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "txn_id": {
+            "type": "string",
+            "description": "Transaction ID"
+          }
+        },
+        "required": [
+          "txn_id"
+        ]
+      },
+      "references": [
+        {
+          "name": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+          "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
+          "relevance": "ongoing geopolitical tensions\u2014particularly the Hamas-Israel and Russia-Ukraine wars\u2014have fuelled a surge in hacktivism"
+        }
+      ]
+    },
+    {
+      "name": "phishing_attempt",
+      "category": "behavioral_account",
+      "status": "candidate",
+      "source": "external",
+      "source_detail": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+      "description": "Checks for suspicious phishing attempts",
+      "detects": "Social engineering attacks and phishing attempts are still increasing, often in combination with malware",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "txn_id": {
+            "type": "string",
+            "description": "Transaction ID"
+          }
+        },
+        "required": [
+          "txn_id"
+        ]
+      },
+      "references": [
+        {
+          "name": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+          "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
+          "relevance": "Awareness campaigns still play a very important countermeasures against social engineering"
+        }
+      ]
+    },
+    {
+      "name": "ceo_fraud",
+      "category": "behavioral_account",
+      "status": "rejected",
+      "source": "external",
+      "source_detail": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+      "description": "Checks for CEO fraud attempts",
+      "detects": "A shift in targets has been observed from consumers, retailers and SMEs to company executives, employees (through \u2018CEO fraud\u2019)",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "txn_id": {
+            "type": "string",
+            "description": "Transaction ID"
+          }
+        },
+        "required": [
+          "txn_id"
+        ]
+      },
+      "references": [
+        {
+          "name": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+          "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
+          "relevance": "A shift in targets has been observed from consumers, retailers and SMEs to company executives, employees"
+        }
+      ]
+    },
+    {
+      "name": "app_fraud",
+      "category": "transaction_context",
+      "status": "proposed",
+      "source": "external",
+      "source_detail": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+      "description": "Checks for authorised push payments (APP) fraud",
+      "detects": "Social engineering increasingly leads to authorised push payments (APP) fraud",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "txn_id": {
+            "type": "string",
+            "description": "Transaction ID"
+          }
+        },
+        "required": [
+          "txn_id"
+        ]
+      },
+      "references": [
+        {
+          "name": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+          "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
+          "relevance": "Social engineering increasingly leads to authorised push payments (APP) fraud"
+        }
+      ]
+    },
+    {
+      "name": "ransomware_attack",
+      "category": "external_intel",
+      "status": "proposed",
+      "source": "external",
+      "source_detail": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+      "description": "Checks for ransomware attacks",
+      "detects": "Ransomware is still a relevant threat, requiring adequate mitigating measures",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "txn_id": {
+            "type": "string",
+            "description": "Transaction ID"
+          }
+        },
+        "required": [
+          "txn_id"
+        ]
+      },
+      "references": [
+        {
+          "name": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+          "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
+          "relevance": "Measures against malware include proper maintenance of own devices"
         }
       ]
     }

@@ -50,6 +50,10 @@ tool_registry = ToolRegistry(REGISTRY_PATH)
 _investigation_lock = threading.Lock()
 _investigation_state = {"txn_id": None}
 
+# Serializes registry.json writes (scanner proposals, dashboard approvals) —
+# same rationale as _investigation_lock, applied to the shared JSON file.
+_registry_lock = threading.Lock()
+
 
 @fraud_bp.route('/fraud/transactions', methods=['GET'])
 def get_transactions():
@@ -311,3 +315,70 @@ def get_tool_detail(tool_name):
         None
     )
     return jsonify({"tool": tool, "category": category})
+
+
+@fraud_bp.route('/fraud/tools/propose', methods=['POST'])
+def propose_tools():
+    """
+    Accept a list of scanner-proposed tool entries and write them to the
+    registry with status="proposed". Body: JSON array of tool dicts
+    (see ai_agents/tool_scanner.py output format).
+    """
+    proposals = request.get_json(silent=True)
+    if not isinstance(proposals, list):
+        return jsonify({"error": "Request body must be a JSON array of tool proposals"}), 400
+
+    if not _registry_lock.acquire(blocking=False):
+        return jsonify({"error": "Registry is being updated by another request, try again"}), 409
+
+    try:
+        stored = []
+        errors = []
+        for proposal in proposals:
+            if not isinstance(proposal, dict):
+                errors.append({"name": "?", "error": f"Proposal must be an object, got {type(proposal).__name__}"})
+                continue
+            result = tool_registry.propose_tool(proposal)
+            if "error" in result:
+                errors.append({"name": proposal.get("name", "?"), "error": result["error"]})
+            else:
+                stored.append(result)
+        return jsonify({"stored": stored, "errors": errors})
+    finally:
+        _registry_lock.release()
+
+
+def _status_transition_response(result):
+    """Shared error-status mapping for approve/reject: a missing tool is a
+    404, but a disallowed transition (e.g. tool isn't 'proposed') is a 409
+    conflict, not a 404 — the tool exists, the request is just invalid."""
+    if "error" not in result:
+        return jsonify({"tool": result})
+    code = 404 if result["error"].startswith("Unknown tool") else 409
+    return jsonify(result), code
+
+
+@fraud_bp.route('/fraud/tools/<tool_name>/approve', methods=['POST'])
+def approve_tool(tool_name):
+    """Approve a proposed tool: flips status from 'proposed' to 'candidate'."""
+    if not _registry_lock.acquire(blocking=False):
+        return jsonify({"error": "Registry is being updated by another request, try again"}), 409
+
+    try:
+        result = tool_registry.update_status(tool_name, "candidate")
+        return _status_transition_response(result)
+    finally:
+        _registry_lock.release()
+
+
+@fraud_bp.route('/fraud/tools/<tool_name>/reject', methods=['POST'])
+def reject_tool(tool_name):
+    """Dismiss a proposed tool: flips status to 'rejected' (non-destructive)."""
+    if not _registry_lock.acquire(blocking=False):
+        return jsonify({"error": "Registry is being updated by another request, try again"}), 409
+
+    try:
+        result = tool_registry.update_status(tool_name, "rejected")
+        return _status_transition_response(result)
+    finally:
+        _registry_lock.release()

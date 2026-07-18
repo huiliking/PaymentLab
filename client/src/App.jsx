@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
+import React, { useState, useEffect, useRef } from 'react'
+import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom'
 import { loadStripe } from '@stripe/stripe-js'
 import { fetchConfig } from './utils/api'
 import ProductsPage from './pages/ProductsPage'
@@ -8,6 +8,134 @@ import ConfirmationPage from './pages/ConfirmationPage'
 import FraudDashboard from './pages/FraudDashboard'
 import ToolDashboard from './pages/ToolDashboard'
 import UsageDashboard from './pages/UsageDashboard'
+
+// The shared .page wrapper caps width at 960px for the storefront pages
+// (product grid, checkout). Wide dashboard-style pages (sidebar + tables)
+// need more room, so they opt into a wider max-width here.
+const WIDE_PAGE_ROUTES = ['/tools']
+
+// The locale/currency indicator bar is only meaningful on the storefront
+// demo pages — Fraud Lab / Tools / Usage don't use locale or currency,
+// so it doesn't belong there.
+const STOREFRONT_ROUTES = ['/', '/checkout', '/confirmation']
+
+function PageWrapper({ locale, currency, children }) {
+  const location = useLocation()
+  const isWide = WIDE_PAGE_ROUTES.includes(location.pathname)
+  const showLocaleBar = STOREFRONT_ROUTES.includes(location.pathname)
+  return (
+    <div className="page" style={isWide ? { maxWidth: 1400 } : undefined}>
+      {showLocaleBar && (
+        <div className="locale-bar">
+          <span className="dot" />
+          <span>locale: {locale}</span>
+          <span>|</span>
+          <span>currency: {currency.toUpperCase()}</span>
+          <span>|</span>
+          <span>browser: {navigator.language}</span>
+        </div>
+      )}
+      {children}
+    </div>
+  )
+}
+
+const navLinkStyle = {
+  textDecoration: 'none',
+  color: 'var(--ink-muted)',
+  fontSize: '0.9rem',
+  fontWeight: 500,
+}
+
+const selectStyle = {
+  padding: '0.35rem 0.5rem',
+  fontSize: '0.82rem',
+  fontFamily: 'var(--font-mono)',
+  border: '1px solid var(--border)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'transparent',
+}
+
+// Groups the storefront-demo controls (locale, currency, product grid, cart)
+// under one menu instead of sitting as top-level nav items next to the
+// app's actual capabilities (Fraud Lab / Tools / Usage).
+function MerchantDemoMenu({ locale, setLocale, currency, setCurrency, currencies, cartCount }) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handleClickOutside = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [open])
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '0.35rem',
+          background: 'transparent', border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-sm)', padding: '0.35rem 0.75rem',
+          fontSize: '0.9rem', fontWeight: 500, color: 'var(--ink-secondary)',
+          cursor: 'pointer', fontFamily: 'inherit',
+        }}
+      >
+        Merchant Demo {cartCount > 0 && <span className="badge badge-success">{cartCount}</span>} {open ? '▴' : '▾'}
+      </button>
+
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 0.5rem)', right: 0,
+          background: 'var(--surface-card)', border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-md)',
+          padding: '0.75rem', minWidth: 200, display: 'flex', flexDirection: 'column', gap: '0.6rem',
+          zIndex: 10,
+        }}>
+          <Link to="/" onClick={() => setOpen(false)} style={navLinkStyle}>Product Grid</Link>
+          <Link to="/checkout" onClick={() => setOpen(false)} style={{ ...navLinkStyle, display: 'flex', alignItems: 'center', gap: '0.35rem', color: cartCount > 0 ? 'var(--accent)' : 'var(--ink-muted)' }}>
+            Cart {cartCount > 0 && <span className="badge badge-success">{cartCount}</span>}
+          </Link>
+
+          <div style={{ borderTop: '1px solid var(--border)', margin: '0.1rem 0' }} />
+
+          <label style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '-0.35rem' }}>
+            Locale
+          </label>
+          <select value={locale} onChange={(e) => setLocale(e.target.value)} style={selectStyle}>
+            <option value="en-US">en-US</option>
+            <option value="en-CA">en-CA</option>
+            <option value="fr-CA">fr-CA</option>
+            <option value="fr-FR">fr-FR</option>
+            <option value="es-ES">es-ES</option>
+            <option value="es-MX">es-MX</option>
+            <option value="de-DE">de-DE</option>
+            <option value="ja-JP">ja-JP</option>
+            <option value="pt-BR">pt-BR</option>
+            <option value="zh-CN">zh-CN</option>
+            <option value="hi-IN">hi-IN</option>
+            <option value="fi-FI">fi-FI</option>
+            <option value="ko-KR">ko-KR</option>
+          </select>
+
+          <label style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '-0.35rem' }}>
+            Currency
+          </label>
+          <select value={currency} onChange={(e) => setCurrency(e.target.value)} style={selectStyle}>
+            {currencies.map((c) => (
+              <option key={c} value={c}>{c.toUpperCase()}</option>
+            ))}
+          </select>
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function App() {
   const [stripePromise, setStripePromise] = useState(null)
@@ -67,97 +195,30 @@ export default function App() {
         borderBottom: '1px solid var(--border)',
         background: 'var(--surface-card)',
       }}>
-        <Link to="/" style={{ textDecoration: 'none', color: 'var(--ink)', fontWeight: 500, fontSize: '1.1rem', letterSpacing: '-0.01em' }}>
-          <span style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: '0.85rem', marginRight: '0.5rem' }}>&#9632;</span>
-          Payment Lab
-        </Link>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          {/* Locale selector */}
-          <select
-            value={locale}
-            onChange={e => setLocale(e.target.value)}
-            style={{ padding: '0.35rem 0.5rem', fontSize: '0.82rem', fontFamily: 'var(--font-mono)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', background: 'transparent' }}
-          >
-            <option value="en-US">en-US</option>
-            <option value="en-CA">en-CA</option>
-            <option value="fr-CA">fr-CA</option>
-            <option value="fr-FR">fr-FR</option>
-            <option value="es-ES">es-ES</option>
-            <option value="es-MX">es-MX</option>
-            <option value="de-DE">de-DE</option>
-            <option value="ja-JP">ja-JP</option>
-            <option value="pt-BR">pt-BR</option>
-            <option value="zh-CN">zh-CN</option>
-            <option value="hi-IN">hi-IN</option>
-            <option value="fi-FI">fi-FI</option>
-            <option value="ko-KR">ko-KR</option>
-          </select>
-
-          {/* Currency selector */}
-          <select
-            value={currency}
-            onChange={e => setCurrency(e.target.value)}
-            style={{ padding: '0.35rem 0.5rem', fontSize: '0.82rem', fontFamily: 'var(--font-mono)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', background: 'transparent' }}
-          >
-            {config.supported_currencies.map(c => (
-              <option key={c} value={c}>{c.toUpperCase()}</option>
-            ))}
-          </select>
-
-          {/* Cart indicator */}
-          <Link to="/fraud" style={{
-            textDecoration: 'none',
-            color: 'var(--ink-muted)',
-            fontSize: '0.9rem',
-            fontWeight: 500,
-          }}>
-            Fraud Lab
+        <div style={{ display: 'flex', alignItems: 'center', gap: '2rem' }}>
+          <Link to="/" style={{ textDecoration: 'none', color: 'var(--ink)', fontWeight: 500, fontSize: '1.1rem', letterSpacing: '-0.01em' }}>
+            <span style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: '0.85rem', marginRight: '0.5rem' }}>&#9632;</span>
+            Payment Lab
           </Link>
 
-          <Link to="/tools" style={{
-            textDecoration: 'none',
-            color: 'var(--ink-muted)',
-            fontSize: '0.9rem',
-            fontWeight: 500,
-          }}>
-            Tools
-          </Link>
-
-          <Link to="/metering" style={{
-            textDecoration: 'none',
-            color: 'var(--ink-muted)',
-            fontSize: '0.9rem',
-            fontWeight: 500,
-          }}>
-            Usage
-          </Link>
-
-          <Link to="/checkout" style={{
-            textDecoration: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.35rem',
-            color: cartCount > 0 ? 'var(--accent)' : 'var(--ink-muted)',
-            fontSize: '0.9rem',
-            fontWeight: 500,
-          }}>
-            Cart {cartCount > 0 && <span className="badge badge-success">{cartCount}</span>}
-          </Link>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
+            <Link to="/fraud" style={navLinkStyle}>Fraud Lab</Link>
+            <Link to="/tools" style={navLinkStyle}>Tools</Link>
+            <Link to="/metering" style={navLinkStyle}>Usage</Link>
+          </div>
         </div>
+
+        <MerchantDemoMenu
+          locale={locale}
+          setLocale={setLocale}
+          currency={currency}
+          setCurrency={setCurrency}
+          currencies={config.supported_currencies}
+          cartCount={cartCount}
+        />
       </nav>
 
-      {/* Locale indicator bar */}
-      <div className="page">
-        <div className="locale-bar">
-          <span className="dot" />
-          <span>locale: {locale}</span>
-          <span>|</span>
-          <span>currency: {currency.toUpperCase()}</span>
-          <span>|</span>
-          <span>browser: {navigator.language}</span>
-        </div>
-
+      <PageWrapper locale={locale} currency={currency}>
         <Routes>
           <Route path="/" element={
             <ProductsPage
@@ -191,7 +252,7 @@ export default function App() {
             <UsageDashboard />
           } />
         </Routes>
-      </div>
+      </PageWrapper>
     </BrowserRouter>
   )
 }

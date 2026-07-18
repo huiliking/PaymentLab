@@ -27,6 +27,7 @@ MCP Compatibility:
 
 import json
 import os
+import tempfile
 from typing import Any, Dict, List, Optional
 
 
@@ -232,6 +233,7 @@ class ToolRegistry:
         active = [t for t in tools if t["status"] == "active"]
         candidate = [t for t in tools if t["status"] == "candidate"]
         proposed = [t for t in tools if t["status"] == "proposed"]
+        rejected = [t for t in tools if t["status"] == "rejected"]
         builtin = [t for t in tools if t["source"] == "builtin"]
         external = [t for t in tools if t["source"] == "external"]
 
@@ -242,6 +244,8 @@ class ToolRegistry:
                 "total": len(cat_tools),
                 "active": len([t for t in cat_tools if t["status"] == "active"]),
                 "candidate": len([t for t in cat_tools if t["status"] == "candidate"]),
+                "proposed": len([t for t in cat_tools if t["status"] == "proposed"]),
+                "rejected": len([t for t in cat_tools if t["status"] == "rejected"]),
             }
 
         return {
@@ -249,12 +253,97 @@ class ToolRegistry:
             "active": len(active),
             "candidate": len(candidate),
             "proposed": len(proposed),
+            "rejected": len(rejected),
             "by_source": {
                 "builtin": len(builtin),
                 "external": len(external),
             },
             "by_category": by_category,
         }
+
+    # ── Registry Mutation (scanner proposals / dashboard approval) ─────────
+
+    REQUIRED_TOOL_FIELDS = ("name", "category", "status", "source", "description", "detects", "input_schema", "references")
+
+    # Only these status transitions are allowed via update_status(). Both
+    # approve and reject only make sense starting from "proposed" — this
+    # blocks a stray/replayed call from silently deactivating an already
+    # "active" tool or re-flipping an already-decided one.
+    VALID_STATUS_TRANSITIONS = {
+        "proposed": {"candidate", "rejected"},
+    }
+
+    def _persist(self):
+        """
+        Write self._data back to registry.json and re-index.
+
+        Writes to a temp file in the same directory and atomically renames
+        it into place (os.replace), so a crash or disk-full error mid-write
+        can't leave registry.json truncated/corrupt — the old file stays
+        valid until the new one is fully written.
+        """
+        directory = os.path.dirname(self._registry_path) or "."
+        fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".registry_", suffix=".json.tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(self._data, f, indent=2)
+            os.replace(tmp_path, self._registry_path)
+        except BaseException:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
+        self.load()
+
+    def propose_tool(self, tool_dict: Dict) -> Dict:
+        """
+        Add a new tool entry (must have status: "proposed") to the registry
+        and persist to disk. Validates required fields, category ID, and
+        that the entry is actually unreviewed (status == "proposed") —
+        anything else would skip the human-approval step this endpoint
+        exists to enforce.
+
+        Returns the stored tool dict, or {"error": ...} if invalid.
+        """
+        missing = [f for f in self.REQUIRED_TOOL_FIELDS if f not in tool_dict]
+        if missing:
+            return {"error": f"Missing required fields: {', '.join(missing)}"}
+
+        if tool_dict["status"] != "proposed":
+            return {"error": f"New tools must be proposed with status 'proposed', got '{tool_dict['status']}'"}
+
+        if tool_dict["category"] not in self._categories_by_id:
+            return {"error": f"Unknown category: {tool_dict['category']}"}
+
+        if tool_dict["name"] in self._tools_by_name:
+            return {"error": f"Tool '{tool_dict['name']}' already exists in registry"}
+
+        self._data["tools"].append(tool_dict)
+        self._persist()
+        return tool_dict
+
+    def update_status(self, name: str, new_status: str) -> Dict:
+        """
+        Update a tool's status (e.g. "proposed" -> "candidate") and persist.
+        Only transitions listed in VALID_STATUS_TRANSITIONS are allowed.
+
+        Returns the updated tool dict, or {"error": ...} if not found or
+        the transition isn't allowed from the tool's current status.
+        """
+        tool = self._tools_by_name.get(name)
+        if not tool:
+            return {"error": f"Unknown tool: {name}"}
+
+        current_status = tool["status"]
+        allowed = self.VALID_STATUS_TRANSITIONS.get(current_status, set())
+        if new_status not in allowed:
+            return {
+                "error": f"Cannot transition '{name}' from '{current_status}' to '{new_status}'. "
+                         f"Allowed from '{current_status}': {sorted(allowed) or 'none'}"
+            }
+
+        tool["status"] = new_status
+        self._persist()
+        return self._tools_by_name[name]
 
     # ── Registry Metadata ──────────────────────────────────────────────────
 

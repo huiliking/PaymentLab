@@ -1,5 +1,78 @@
 import React, { useState, useEffect } from 'react';
 
+/**
+ * ToolDashboard.jsx
+ * =================
+ * Registry browser for the fraud investigation tool catalog. Uses the
+ * shared design system from index.css (CSS custom properties, .card/.btn
+ * classes) — the previous version used Tailwind utility classes, but this
+ * project has no Tailwind build step, so none of that styling ever
+ * actually rendered.
+ */
+
+// TODO: wire to real auth/roles once available. Hardcoded so the
+// approve/reject UI is already structured for role-gating.
+const isAdmin = true;
+
+const CATEGORY_ICONS = {
+  transaction_context: '💳',
+  identity_history: '👤',
+  card_velocity: '⚡',
+  geo_locale: '🌍',
+  address_shipping: '📦',
+  behavioral_account: '📊',
+  merchant_product: '🏪',
+  external_intel: '🔍',
+};
+
+const categoryIcon = (categoryId) => CATEGORY_ICONS[categoryId] || '📋';
+
+const STATUS_STYLE = {
+  active: { bg: 'var(--success-soft)', text: 'var(--success)' },
+  candidate: { bg: 'var(--warning-soft)', text: 'var(--warning)' },
+  proposed: { bg: 'var(--surface-elevated)', text: 'var(--ink-muted)' },
+  rejected: { bg: 'var(--danger-soft)', text: 'var(--danger)' },
+};
+
+const STATUS_LABEL = { active: 'Active', candidate: 'Candidate', proposed: 'Proposed', rejected: 'Rejected' };
+
+const STATUS_TOOLTIP = {
+  active: 'Implemented and live — the investigation agent can call this tool today.',
+  candidate: 'Human-approved as worth building, but no implementation exists yet. Not callable until someone writes the InvestigationTools method and flips it to Active.',
+  proposed: 'Auto-suggested by the tool scanner from a threat report. Not yet reviewed by a human — click Approve to endorse it as worth building (moves it to Candidate), or Dismiss to reject it.',
+  rejected: 'Dismissed by a human reviewer as not worth building. Kept here (not deleted) in case the decision needs to be revisited.',
+};
+
+function StatusBadge({ status }) {
+  const s = STATUS_STYLE[status] || STATUS_STYLE.proposed;
+  return (
+    <span
+      title={STATUS_TOOLTIP[status] || ''}
+      style={{
+        display: 'inline-flex', alignItems: 'center', padding: '0.2rem 0.6rem',
+        borderRadius: 100, fontSize: '0.78rem', fontWeight: 500,
+        background: s.bg, color: s.text, cursor: 'help',
+        borderBottom: '1px dotted currentColor',
+      }}
+    >
+      {STATUS_LABEL[status] || status}
+    </span>
+  );
+}
+
+function SourceBadge({ source }) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', padding: '0.2rem 0.6rem',
+      borderRadius: 100, fontSize: '0.78rem', fontWeight: 500,
+      background: source === 'builtin' ? 'var(--accent-soft)' : 'var(--surface-elevated)',
+      color: source === 'builtin' ? 'var(--accent)' : 'var(--ink-secondary)',
+    }}>
+      {source === 'builtin' ? 'Built-in' : 'External API'}
+    </span>
+  );
+}
+
 const ToolDashboard = () => {
   const [registry, setRegistry] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -7,6 +80,8 @@ const ToolDashboard = () => {
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [selectedStatus, setSelectedStatus] = useState('all');
   const [expandedTool, setExpandedTool] = useState(null);
+  const [approving, setApproving] = useState(null);
+  const [rejecting, setRejecting] = useState(null);
 
   useEffect(() => {
     fetchRegistry();
@@ -25,27 +100,61 @@ const ToolDashboard = () => {
     }
   };
 
+  const handleApprove = async (toolName) => {
+    if (approving !== null) return;
+    setApproving(toolName);
+    try {
+      const res = await fetch(`/api/fraud/tools/${toolName}/approve`, { method: 'POST' });
+      if (res.status === 409) {
+        const conflict = await res.json();
+        alert(conflict.error || 'Registry is busy, try again');
+        return;
+      }
+      if (!res.ok) throw new Error('Approve failed');
+      await fetchRegistry();
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      setApproving(null);
+    }
+  };
+
+  const handleReject = async (toolName) => {
+    if (rejecting !== null) return;
+    if (!window.confirm(`Dismiss "${toolName}"? It will be marked Rejected (not deleted).`)) return;
+    setRejecting(toolName);
+    try {
+      const res = await fetch(`/api/fraud/tools/${toolName}/reject`, { method: 'POST' });
+      if (res.status === 409) {
+        const conflict = await res.json();
+        alert(conflict.error || 'Registry is busy, try again');
+        return;
+      }
+      if (!res.ok) throw new Error('Dismiss failed');
+      await fetchRegistry();
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      setRejecting(null);
+    }
+  };
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading tool registry...</p>
-        </div>
+      <div style={{ textAlign: 'center', paddingTop: '4rem' }}>
+        <div className="spinner" style={{ borderTopColor: 'var(--accent)', borderColor: 'var(--border)', margin: '0 auto' }} />
+        <p style={{ marginTop: '1rem', color: 'var(--ink-secondary)' }}>Loading tool registry...</p>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="bg-red-50 border border-red-200 rounded-lg p-6 max-w-md">
-          <h2 className="text-red-800 font-semibold mb-2">Error Loading Registry</h2>
-          <p className="text-red-600">{error}</p>
-          <button 
-            onClick={fetchRegistry}
-            className="mt-4 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
-          >
+      <div>
+        <div className="card" style={{ maxWidth: 480, margin: '4rem auto', textAlign: 'center' }}>
+          <h2 style={{ color: 'var(--danger)', marginBottom: '0.5rem' }}>Error Loading Registry</h2>
+          <p style={{ color: 'var(--ink-secondary)' }}>{error}</p>
+          <button className="btn btn-primary" style={{ marginTop: '1rem' }} onClick={fetchRegistry}>
             Retry
           </button>
         </div>
@@ -53,230 +162,278 @@ const ToolDashboard = () => {
     );
   }
 
-  const filteredTools = registry.tools.filter(tool => {
+  const filteredTools = registry.tools.filter((tool) => {
     if (selectedCategory && tool.category !== selectedCategory) return false;
     if (selectedStatus !== 'all' && tool.status !== selectedStatus) return false;
     return true;
   });
 
-  const categoryIcon = (categoryId) => {
-    const icons = {
-      'transaction_context': '💳',
-      'identity_history': '👤',
-      'card_velocity': '⚡',
-      'geo_locale': '🌍',
-      'address_shipping': '📦',
-      'behavioral_account': '📊',
-      'merchant_product': '🏪',
-      'external_intelligence': '🔍'
-    };
-    return icons[categoryId] || '📋';
-  };
-
-  const statusBadge = (status) => {
-    const styles = {
-      active: 'bg-green-100 text-green-800 border-green-300',
-      candidate: 'bg-yellow-100 text-yellow-800 border-yellow-300',
-      proposed: 'bg-gray-100 text-gray-800 border-gray-300'
-    };
-    const labels = {
-      active: 'Active',
-      candidate: 'Candidate',
-      proposed: 'Proposed'
-    };
-    return (
-      <span className={`px-2 py-1 text-xs font-medium rounded border ${styles[status] || styles.proposed}`}>
-        {labels[status] || status}
-      </span>
-    );
-  };
-
-  const sourceBadge = (source) => {
-    const styles = {
-      builtin: 'bg-blue-100 text-blue-800',
-      external: 'bg-purple-100 text-purple-800'
-    };
-    return (
-      <span className={`px-2 py-1 text-xs font-medium rounded ${styles[source] || styles.builtin}`}>
-        {source === 'builtin' ? 'Built-in' : 'External API'}
-      </span>
-    );
-  };
+  const activeCategory = registry.categories.find((c) => c.id === selectedCategory);
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div>
       {/* Header */}
-      <div className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">{registry.name}</h1>
-              <p className="mt-1 text-sm text-gray-500">Version {registry.version}</p>
-            </div>
-            <div className="flex gap-6">
-              <div className="text-center">
-                <div className="text-3xl font-bold text-green-600">{registry.statistics.active}</div>
-                <div className="text-xs text-gray-500 uppercase tracking-wide">Active</div>
-              </div>
-              <div className="text-center">
-                <div className="text-3xl font-bold text-yellow-600">{registry.statistics.candidate}</div>
-                <div className="text-xs text-gray-500 uppercase tracking-wide">Candidate</div>
-              </div>
-              <div className="text-center">
-                <div className="text-3xl font-bold text-gray-600">{registry.statistics.total_tools}</div>
-                <div className="text-xs text-gray-500 uppercase tracking-wide">Total</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Filters */}
-          <div className="mt-6 flex gap-4">
-            <select
-              value={selectedCategory || ''}
-              onChange={(e) => setSelectedCategory(e.target.value || null)}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              <option value="">All Categories ({registry.statistics.total_tools})</option>
-              {registry.categories.map(cat => {
-                const categoryCount = registry.statistics.by_category[cat.id]?.total || 
-                                    registry.statistics.by_category[cat.id] || 0;
-                return (
-                  <option key={cat.id} value={cat.id}>
-                    {categoryIcon(cat.id)} {cat.name} ({categoryCount})
-                  </option>
-                );
-              })}
-            </select>
-
-            <select
-              value={selectedStatus}
-              onChange={(e) => setSelectedStatus(e.target.value)}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              <option value="all">All Status ({registry.statistics.total_tools})</option>
-              <option value="active">Active ({registry.statistics.active})</option>
-              <option value="candidate">Candidate ({registry.statistics.candidate})</option>
-            </select>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1.5rem' }}>
+        <div>
+          <h1>{registry.name}</h1>
+          <p>Version {registry.version}</p>
+        </div>
+        <div>
+          <div style={{ display: 'flex', gap: '1.5rem' }}>
+            <StatPill value={registry.statistics.active} label="Active" color="var(--success)" tooltip={STATUS_TOOLTIP.active} />
+            <StatPill value={registry.statistics.candidate} label="Candidate" color="var(--warning)" tooltip={STATUS_TOOLTIP.candidate} />
+            <StatPill value={registry.statistics.proposed || 0} label="Proposed" color="var(--ink-muted)" tooltip={STATUS_TOOLTIP.proposed} />
+            <StatPill value={registry.statistics.total_tools} label="Total" color="var(--ink)" />
           </div>
         </div>
       </div>
 
-      {/* Main Content - Table */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {selectedCategory ? (
-          // Single category view
-          <CategoryTable 
-            category={registry.categories.find(c => c.id === selectedCategory)}
-            tools={filteredTools}
-            statusBadge={statusBadge}
-            sourceBadge={sourceBadge}
-            categoryIcon={categoryIcon}
-            expandedTool={expandedTool}
-            setExpandedTool={setExpandedTool}
-          />
-        ) : (
-          // All categories view
-          registry.categories.map(category => {
-            const categoryTools = filteredTools.filter(t => t.category === category.id);
-            if (categoryTools.length === 0) return null;
-            
-            return (
-              <CategoryTable 
-                key={category.id}
-                category={category}
-                tools={categoryTools}
-                statusBadge={statusBadge}
-                sourceBadge={sourceBadge}
-                categoryIcon={categoryIcon}
-                expandedTool={expandedTool}
-                setExpandedTool={setExpandedTool}
-              />
-            );
-          })
-        )}
+      <div style={{ marginBottom: '1.5rem' }}>
+        <select
+          value={selectedStatus}
+          onChange={(e) => setSelectedStatus(e.target.value)}
+          style={{ maxWidth: 260 }}
+        >
+          <option value="all">All Status ({registry.statistics.total_tools})</option>
+          <option value="active">Active ({registry.statistics.active})</option>
+          <option value="candidate">Candidate ({registry.statistics.candidate})</option>
+          <option value="proposed">Proposed ({registry.statistics.proposed || 0})</option>
+          <option value="rejected">Rejected ({registry.statistics.rejected || 0})</option>
+        </select>
+      </div>
 
-        {filteredTools.length === 0 && (
-          <div className="text-center py-12">
-            <p className="text-gray-500">No tools match the current filters</p>
-          </div>
-        )}
+      {/* Body: sidebar + content */}
+      <div style={{ display: 'flex', gap: '2rem', alignItems: 'flex-start' }}>
+        <CategorySidebar
+          categories={registry.categories}
+          statistics={registry.statistics}
+          selectedCategory={selectedCategory}
+          onSelect={setSelectedCategory}
+        />
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {!selectedCategory ? (
+            <CategoryOverviewGrid
+              categories={registry.categories}
+              statistics={registry.statistics}
+              onSelect={setSelectedCategory}
+            />
+          ) : (
+            <CategoryTable
+              category={activeCategory}
+              tools={filteredTools}
+              expandedTool={expandedTool}
+              setExpandedTool={setExpandedTool}
+              approving={approving}
+              onApprove={handleApprove}
+              rejecting={rejecting}
+              onReject={handleReject}
+            />
+          )}
+
+          {selectedCategory && filteredTools.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '3rem 0', color: 'var(--ink-muted)' }}>
+              No tools match the current filters
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 };
 
-const CategoryTable = ({ category, tools, statusBadge, sourceBadge, categoryIcon, expandedTool, setExpandedTool }) => {
+function StatPill({ value, label, color, tooltip }) {
   return (
-    <div className="mb-8">
-      {/* Category Header */}
-      <div className="bg-gradient-to-r from-blue-50 to-blue-100 px-6 py-4 rounded-t-lg border border-blue-200">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h2 className="text-xl font-bold text-gray-900">
-              {categoryIcon(category.id)} {category.name}
-            </h2>
-            <span className="text-sm text-gray-600 italic">"{category.question}"</span>
+    <div style={{ textAlign: 'center', cursor: tooltip ? 'help' : 'default' }} title={tooltip}>
+      <div style={{ fontSize: '1.75rem', fontWeight: 600, color, fontFamily: 'var(--font-mono)' }}>{value}</div>
+      <div style={{
+        fontSize: '0.7rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em',
+        borderBottom: tooltip ? '1px dotted var(--ink-muted)' : 'none', display: 'inline-block',
+      }}>
+        {label}
+      </div>
+    </div>
+  );
+}
+
+function CategorySidebar({ categories, statistics, selectedCategory, onSelect }) {
+  const rowStyle = (isSelected) => ({
+    width: '100%', textAlign: 'left', padding: '0.85rem 1rem',
+    borderBottom: '1px solid var(--border)', background: isSelected ? 'var(--accent-soft)' : 'transparent',
+    borderLeft: isSelected ? '3px solid var(--accent)' : '3px solid transparent',
+    cursor: 'pointer', font: 'inherit', color: 'inherit',
+  });
+
+  return (
+    <div style={{ width: 260, flexShrink: 0, position: 'sticky', top: '2rem' }} className="card">
+      <div style={{ padding: 0 }}>
+        <button style={{ ...rowStyle(!selectedCategory), borderTopLeftRadius: 'var(--radius-lg)', borderTopRightRadius: 'var(--radius-lg)' }} onClick={() => onSelect(null)}>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>📋 All Categories</span>
+            <span style={{ color: 'var(--ink-muted)', fontSize: '0.85rem' }}>{statistics.total_tools}</span>
           </div>
-          <div className="text-sm font-medium text-gray-600">
-            {tools.length} {tools.length === 1 ? 'tool' : 'tools'}
-          </div>
+        </button>
+        {categories.map((cat, idx) => {
+          const stats = statistics.by_category[cat.id] || {};
+          const isSelected = selectedCategory === cat.id;
+          const isLast = idx === categories.length - 1;
+          return (
+            <button
+              key={cat.id}
+              onClick={() => onSelect(cat.id)}
+              style={{
+                ...rowStyle(isSelected),
+                borderBottom: isLast ? 'none' : '1px solid var(--border)',
+                borderBottomLeftRadius: isLast ? 'var(--radius-lg)' : 0,
+                borderBottomRightRadius: isLast ? 'var(--radius-lg)' : 0,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ fontWeight: 500, fontSize: '0.9rem' }}>
+                  {categoryIcon(cat.id)} {cat.name}
+                </span>
+                <span style={{ color: 'var(--ink-muted)', fontSize: '0.85rem' }}>{stats.total || 0}</span>
+              </div>
+              <div style={{ marginTop: 4, display: 'flex', gap: 8, fontSize: '0.72rem', color: 'var(--ink-muted)' }}>
+                <span>{stats.active || 0} active</span>
+                <span>·</span>
+                <span>{stats.candidate || 0} candidate</span>
+                <span>·</span>
+                <span>{stats.proposed || 0} proposed</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CategoryOverviewGrid({ categories, statistics, onSelect }) {
+  return (
+    <div className="product-grid">
+      {categories.map((cat) => {
+        const stats = statistics.by_category[cat.id] || {};
+        return (
+          <button
+            key={cat.id}
+            onClick={() => onSelect(cat.id)}
+            className="card"
+            style={{ textAlign: 'left', cursor: 'pointer', font: 'inherit', color: 'inherit', transition: 'box-shadow 0.15s, border-color 0.15s' }}
+            onMouseEnter={(e) => { e.currentTarget.style.boxShadow = 'var(--shadow-md)'; e.currentTarget.style.borderColor = 'var(--accent)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; e.currentTarget.style.borderColor = 'var(--border)'; }}
+          >
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
+              <span style={{ fontSize: '1.5rem' }}>{categoryIcon(cat.id)}</span>
+              <div>
+                <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>{cat.name}</h3>
+                <p style={{ fontSize: '0.78rem', color: 'var(--ink-muted)', fontStyle: 'italic' }}>"{cat.question}"</p>
+              </div>
+            </div>
+            <p style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--ink-secondary)' }}>{cat.description}</p>
+            <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem', fontSize: '0.78rem' }}>
+              <span style={{ color: 'var(--success)', fontWeight: 500 }}>{stats.active || 0} active</span>
+              <span style={{ color: 'var(--warning)', fontWeight: 500 }}>{stats.candidate || 0} candidate</span>
+              <span style={{ color: 'var(--ink-muted)', fontWeight: 500 }}>{stats.total || 0} total</span>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function CategoryTable({ category, tools, expandedTool, setExpandedTool, approving, onApprove, rejecting, onReject }) {
+  return (
+    <div>
+      <div style={{
+        background: 'var(--accent-soft)', padding: '1rem 1.5rem',
+        borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0',
+        border: '1px solid var(--border)', borderBottom: 'none',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <h2 style={{ fontSize: '1.15rem', fontWeight: 600 }}>
+            {categoryIcon(category.id)} {category.name}
+          </h2>
+          <span style={{ fontSize: '0.85rem', color: 'var(--ink-secondary)', fontStyle: 'italic' }}>"{category.question}"</span>
+        </div>
+        <div style={{ fontSize: '0.85rem', color: 'var(--ink-secondary)', fontWeight: 500 }}>
+          {tools.length} {tools.length === 1 ? 'tool' : 'tools'}
         </div>
       </div>
 
-      {/* Table */}
-      <div className="bg-white shadow-sm rounded-b-lg border border-t-0 border-gray-200 overflow-hidden">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-64">
-                Tool Name
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Description
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">
-                Status
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">
-                Source
-              </th>
-              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-20">
-                Details
-              </th>
+      <div style={{ background: 'var(--surface-card)', border: '1px solid var(--border)', borderRadius: '0 0 var(--radius-lg) var(--radius-lg)', overflowX: 'auto' }}>
+        <table style={{ width: '100%', minWidth: 640, borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: 'var(--surface-elevated)' }}>
+              <th style={{ ...thStyle, width: 200 }}>Tool Name</th>
+              <th style={thStyle}>Description</th>
+              <th style={{ ...thStyle, width: 110 }}>Status</th>
+              <th style={{ ...thStyle, width: 130, textAlign: 'center' }}>{isAdmin ? 'Action' : 'Details'}</th>
             </tr>
           </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {tools.map(tool => (
+          <tbody>
+            {tools.map((tool) => (
               <React.Fragment key={tool.name}>
-                <tr className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="font-mono text-sm font-semibold text-gray-900">{tool.name}</div>
+                <tr style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={tdStyle}>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', fontWeight: 600 }}>{tool.name}</div>
+                    <div style={{ marginTop: 4 }}><SourceBadge source={tool.source} /></div>
                   </td>
-                  <td className="px-6 py-4">
-                    <div className="text-sm text-gray-900">{tool.description}</div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      <span className="font-semibold">Detects:</span> {tool.detects}
+                  <td style={tdStyle}>
+                    <div style={{ fontSize: '0.88rem' }}>{tool.description}</div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--ink-muted)', marginTop: 4 }}>
+                      <strong>Detects:</strong> {tool.detects}
                     </div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    {statusBadge(tool.status)}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    {sourceBadge(tool.source)}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-center">
-                    <button
-                      onClick={() => setExpandedTool(expandedTool === tool.name ? null : tool.name)}
-                      className="text-blue-600 hover:text-blue-800 font-medium text-sm"
-                    >
-                      {expandedTool === tool.name ? '▼' : '▶'}
-                    </button>
+                  <td style={tdStyle}><StatusBadge status={tool.status} /></td>
+                  <td style={{ ...tdStyle, textAlign: 'center' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'stretch' }}>
+                      {tool.status === 'proposed' && isAdmin && (
+                        <button
+                          onClick={() => onApprove(tool.name)}
+                          disabled={approving !== null}
+                          className="btn"
+                          style={{
+                            padding: '0.35rem 0.85rem', fontSize: '0.78rem',
+                            background: approving !== null ? 'var(--surface-elevated)' : 'var(--success)',
+                            color: approving !== null ? 'var(--ink-muted)' : '#fff',
+                            cursor: approving !== null ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          {approving === tool.name ? 'Approving…' : 'Approve'}
+                        </button>
+                      )}
+                      {tool.status === 'proposed' && isAdmin && (
+                        <button
+                          onClick={() => onReject(tool.name)}
+                          disabled={rejecting !== null}
+                          className="btn"
+                          style={{
+                            padding: '0.35rem 0.85rem', fontSize: '0.78rem',
+                            background: rejecting !== null ? 'var(--surface-elevated)' : 'var(--danger)',
+                            color: rejecting !== null ? 'var(--ink-muted)' : '#fff',
+                            cursor: rejecting !== null ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          {rejecting === tool.name ? 'Dismissing…' : 'Dismiss'}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setExpandedTool(expandedTool === tool.name ? null : tool.name)}
+                        className="btn-ghost"
+                        style={{ padding: '0.35rem 0.7rem', fontSize: '0.78rem', whiteSpace: 'nowrap' }}
+                      >
+                        {expandedTool === tool.name ? 'Hide details' : 'See details'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
                 {expandedTool === tool.name && (
-                  <tr>
-                    <td colSpan="5" className="px-6 py-4 bg-gray-50">
-                      <div className="border-2 border-blue-200 rounded-lg bg-white p-4">
+                  <tr style={{ borderTop: '1px solid var(--border)' }}>
+                    <td colSpan="4" style={{ padding: '1rem 1.5rem', background: 'var(--surface-elevated)' }}>
+                      <div className="card">
                         <ToolDetails tool={tool} />
                       </div>
                     </td>
@@ -289,57 +446,51 @@ const CategoryTable = ({ category, tools, statusBadge, sourceBadge, categoryIcon
       </div>
     </div>
   );
-};
+}
+
+const thStyle = { padding: '0.75rem 1.25rem', textAlign: 'left', fontSize: '0.72rem', fontWeight: 600, color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' };
+const tdStyle = { padding: '0.9rem 1.25rem', verticalAlign: 'top' };
 
 const ToolDetails = ({ tool }) => {
   return (
-    <div className="space-y-4">
-      {/* Input Schema */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
       <div>
-        <h4 className="text-sm font-semibold text-gray-700 mb-2">Input Parameters:</h4>
-        <div className="bg-white rounded border border-gray-200 p-3">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-200">
-                <th className="text-left font-mono font-semibold text-gray-700 pb-2 pr-4">Parameter</th>
-                <th className="text-left font-mono font-semibold text-gray-700 pb-2 pr-4">Type</th>
-                <th className="text-left font-mono font-semibold text-gray-700 pb-2">Description</th>
+        <h4 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>Input Parameters:</h4>
+        <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--border)' }}>
+              <th style={{ textAlign: 'left', fontFamily: 'var(--font-mono)', paddingBottom: 6, paddingRight: 16 }}>Parameter</th>
+              <th style={{ textAlign: 'left', fontFamily: 'var(--font-mono)', paddingBottom: 6, paddingRight: 16 }}>Type</th>
+              <th style={{ textAlign: 'left', fontFamily: 'var(--font-mono)', paddingBottom: 6 }}>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            {Object.entries(tool.input_schema.properties || {}).map(([key, schema]) => (
+              <tr key={key} style={{ borderBottom: '1px solid var(--border)' }}>
+                <td style={{ padding: '6px 16px 6px 0', fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{key}</td>
+                <td style={{ padding: '6px 16px 6px 0', fontFamily: 'var(--font-mono)', color: 'var(--ink-secondary)' }}>{schema.type}</td>
+                <td style={{ padding: '6px 0', color: 'var(--ink-secondary)' }}>{schema.description || '—'}</td>
               </tr>
-            </thead>
-            <tbody>
-              {Object.entries(tool.input_schema.properties || {}).map(([key, schema]) => (
-                <tr key={key} className="border-b border-gray-100 last:border-0">
-                  <td className="py-2 pr-4 font-mono text-blue-600">{key}</td>
-                  <td className="py-2 pr-4 font-mono text-gray-600">{schema.type}</td>
-                  <td className="py-2 text-gray-600">{schema.description || '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            ))}
+          </tbody>
+        </table>
       </div>
 
-      {/* References */}
       {tool.references && tool.references.length > 0 && (
         <div>
-          <h4 className="text-sm font-semibold text-gray-700 mb-2">References:</h4>
-          <ul className="space-y-2">
+          <h4 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>References:</h4>
+          <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {tool.references.map((ref, idx) => (
-              <li key={idx} className="text-sm">
+              <li key={idx} style={{ fontSize: '0.85rem' }}>
                 {ref.url ? (
-                  <a 
-                    href={ref.url} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-blue-600 hover:underline font-medium"
-                  >
+                  <a href={ref.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', fontWeight: 500, textDecoration: 'none' }}>
                     {ref.name} ↗
                   </a>
                 ) : (
-                  <span className="text-gray-700 font-medium">{ref.name}</span>
+                  <span style={{ color: 'var(--ink-secondary)', fontWeight: 500 }}>{ref.name}</span>
                 )}
                 {ref.relevance && (
-                  <div className="text-gray-500 ml-4 mt-1">→ {ref.relevance}</div>
+                  <div style={{ color: 'var(--ink-muted)', marginLeft: '1rem', marginTop: 4 }}>→ {ref.relevance}</div>
                 )}
               </li>
             ))}
