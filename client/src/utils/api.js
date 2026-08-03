@@ -5,6 +5,29 @@
 
 const API_BASE = '/api';
 
+// Admin auth for the tool registry (propose/approve/reject). Not a real
+// session system -- just a shared secret the dashboard sends as a bearer
+// token, matched against PAYMENTLAB_ADMIN_KEY on the server. Stored in
+// localStorage so it survives a page reload.
+const ADMIN_KEY_STORAGE_KEY = 'paymentlab_admin_key';
+
+export function getAdminKey() {
+  return localStorage.getItem(ADMIN_KEY_STORAGE_KEY) || '';
+}
+
+export function setAdminKey(key) {
+  if (key) {
+    localStorage.setItem(ADMIN_KEY_STORAGE_KEY, key);
+  } else {
+    localStorage.removeItem(ADMIN_KEY_STORAGE_KEY);
+  }
+}
+
+export function adminAuthHeaders() {
+  const key = getAdminKey();
+  return key ? { Authorization: `Bearer ${key}` } : {};
+}
+
 export async function fetchConfig() {
   const res = await fetch(`${API_BASE}/config`);
   if (!res.ok) throw new Error('Failed to load config');

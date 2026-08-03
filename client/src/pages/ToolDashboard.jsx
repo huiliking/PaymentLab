@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getAdminKey, setAdminKey, adminAuthHeaders } from '../utils/api';
 
 /**
  * ToolDashboard.jsx
@@ -8,11 +9,13 @@ import React, { useState, useEffect } from 'react';
  * classes) — the previous version used Tailwind utility classes, but this
  * project has no Tailwind build step, so none of that styling ever
  * actually rendered.
+ *
+ * Role gating: `isAdmin` reflects whether an admin key is stored locally
+ * (client/src/utils/api.js). This is a UI convenience only — the server is
+ * the actual enforcement point (server/routes/fraud.py, PAYMENTLAB_ADMIN_KEY).
+ * A stale/wrong key here just means the approve/reject calls 401 and the
+ * key gets cleared; it can't grant access the server wouldn't grant.
  */
-
-// TODO: wire to real auth/roles once available. Hardcoded so the
-// approve/reject UI is already structured for role-gating.
-const isAdmin = true;
 
 const CATEGORY_ICONS = {
   transaction_context: '💳',
@@ -82,10 +85,35 @@ const ToolDashboard = () => {
   const [expandedTool, setExpandedTool] = useState(null);
   const [approving, setApproving] = useState(null);
   const [rejecting, setRejecting] = useState(null);
+  const [adminKey, setAdminKeyLocal] = useState(getAdminKey());
+
+  const isAdmin = Boolean(adminKey);
 
   useEffect(() => {
     fetchRegistry();
   }, []);
+
+  const handleAdminLogin = () => {
+    const key = window.prompt('Enter admin key:');
+    if (key === null) return; // cancelled
+    if (!key.trim()) return;
+    setAdminKey(key.trim());
+    setAdminKeyLocal(key.trim());
+  };
+
+  const handleAdminLogout = () => {
+    setAdminKey(null);
+    setAdminKeyLocal('');
+  };
+
+  // A 401 means the stored key is missing/wrong from the server's point of
+  // view — clear it so the UI drops back to the viewer role instead of
+  // showing admin controls that will keep failing.
+  const handleUnauthorized = () => {
+    setAdminKey(null);
+    setAdminKeyLocal('');
+    alert('Admin key is missing or invalid. Please re-enter it.');
+  };
 
   const fetchRegistry = async () => {
     try {
@@ -104,7 +132,14 @@ const ToolDashboard = () => {
     if (approving !== null) return;
     setApproving(toolName);
     try {
-      const res = await fetch(`/api/fraud/tools/${toolName}/approve`, { method: 'POST' });
+      const res = await fetch(`/api/fraud/tools/${toolName}/approve`, {
+        method: 'POST',
+        headers: adminAuthHeaders(),
+      });
+      if (res.status === 401) {
+        handleUnauthorized();
+        return;
+      }
       if (res.status === 409) {
         const conflict = await res.json();
         alert(conflict.error || 'Registry is busy, try again');
@@ -124,7 +159,14 @@ const ToolDashboard = () => {
     if (!window.confirm(`Dismiss "${toolName}"? It will be marked Rejected (not deleted).`)) return;
     setRejecting(toolName);
     try {
-      const res = await fetch(`/api/fraud/tools/${toolName}/reject`, { method: 'POST' });
+      const res = await fetch(`/api/fraud/tools/${toolName}/reject`, {
+        method: 'POST',
+        headers: adminAuthHeaders(),
+      });
+      if (res.status === 401) {
+        handleUnauthorized();
+        return;
+      }
       if (res.status === 409) {
         const conflict = await res.json();
         alert(conflict.error || 'Registry is busy, try again');
@@ -162,7 +204,11 @@ const ToolDashboard = () => {
     );
   }
 
+  // Viewers (no admin key) don't get to see proposed/rejected tools at all —
+  // those are internal review states, not part of the "what does your
+  // system check?" transparency surface merchants get.
   const filteredTools = registry.tools.filter((tool) => {
+    if (!isAdmin && (tool.status === 'proposed' || tool.status === 'rejected')) return false;
     if (selectedCategory && tool.category !== selectedCategory) return false;
     if (selectedStatus !== 'all' && tool.status !== selectedStatus) return false;
     return true;
@@ -178,13 +224,24 @@ const ToolDashboard = () => {
           <h1>{registry.name}</h1>
           <p>Version {registry.version}</p>
         </div>
-        <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
           <div style={{ display: 'flex', gap: '1.5rem' }}>
             <StatPill value={registry.statistics.active} label="Active" color="var(--success)" tooltip={STATUS_TOOLTIP.active} />
             <StatPill value={registry.statistics.candidate} label="Candidate" color="var(--warning)" tooltip={STATUS_TOOLTIP.candidate} />
-            <StatPill value={registry.statistics.proposed || 0} label="Proposed" color="var(--ink-muted)" tooltip={STATUS_TOOLTIP.proposed} />
+            {isAdmin && (
+              <StatPill value={registry.statistics.proposed || 0} label="Proposed" color="var(--ink-muted)" tooltip={STATUS_TOOLTIP.proposed} />
+            )}
             <StatPill value={registry.statistics.total_tools} label="Total" color="var(--ink)" />
           </div>
+          {isAdmin ? (
+            <button className="btn-ghost" style={{ padding: '0.35rem 0.7rem', fontSize: '0.78rem', whiteSpace: 'nowrap' }} onClick={handleAdminLogout}>
+              Admin ✓ (log out)
+            </button>
+          ) : (
+            <button className="btn-ghost" style={{ padding: '0.35rem 0.7rem', fontSize: '0.78rem', whiteSpace: 'nowrap' }} onClick={handleAdminLogin}>
+              Admin sign-in
+            </button>
+          )}
         </div>
       </div>
 
@@ -192,13 +249,15 @@ const ToolDashboard = () => {
         <select
           value={selectedStatus}
           onChange={(e) => setSelectedStatus(e.target.value)}
-          style={{ maxWidth: 260 }}
+          disabled={!selectedCategory}
+          title={!selectedCategory ? 'Select a category to filter by status' : undefined}
+          style={{ maxWidth: 260, opacity: selectedCategory ? 1 : 0.5 }}
         >
           <option value="all">All Status ({registry.statistics.total_tools})</option>
           <option value="active">Active ({registry.statistics.active})</option>
           <option value="candidate">Candidate ({registry.statistics.candidate})</option>
-          <option value="proposed">Proposed ({registry.statistics.proposed || 0})</option>
-          <option value="rejected">Rejected ({registry.statistics.rejected || 0})</option>
+          {isAdmin && <option value="proposed">Proposed ({registry.statistics.proposed || 0})</option>}
+          {isAdmin && <option value="rejected">Rejected ({registry.statistics.rejected || 0})</option>}
         </select>
       </div>
 
@@ -209,6 +268,7 @@ const ToolDashboard = () => {
           statistics={registry.statistics}
           selectedCategory={selectedCategory}
           onSelect={setSelectedCategory}
+          isAdmin={isAdmin}
         />
 
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -217,6 +277,7 @@ const ToolDashboard = () => {
               categories={registry.categories}
               statistics={registry.statistics}
               onSelect={setSelectedCategory}
+              isAdmin={isAdmin}
             />
           ) : (
             <CategoryTable
@@ -225,6 +286,7 @@ const ToolDashboard = () => {
               expandedTool={expandedTool}
               setExpandedTool={setExpandedTool}
               approving={approving}
+              isAdmin={isAdmin}
               onApprove={handleApprove}
               rejecting={rejecting}
               onReject={handleReject}
@@ -256,7 +318,7 @@ function StatPill({ value, label, color, tooltip }) {
   );
 }
 
-function CategorySidebar({ categories, statistics, selectedCategory, onSelect }) {
+function CategorySidebar({ categories, statistics, selectedCategory, onSelect, isAdmin }) {
   const rowStyle = (isSelected) => ({
     width: '100%', textAlign: 'left', padding: '0.85rem 1rem',
     borderBottom: '1px solid var(--border)', background: isSelected ? 'var(--accent-soft)' : 'transparent',
@@ -298,8 +360,12 @@ function CategorySidebar({ categories, statistics, selectedCategory, onSelect })
                 <span>{stats.active || 0} active</span>
                 <span>·</span>
                 <span>{stats.candidate || 0} candidate</span>
-                <span>·</span>
-                <span>{stats.proposed || 0} proposed</span>
+                {isAdmin && (
+                  <>
+                    <span>·</span>
+                    <span>{stats.proposed || 0} proposed</span>
+                  </>
+                )}
               </div>
             </button>
           );
@@ -343,7 +409,7 @@ function CategoryOverviewGrid({ categories, statistics, onSelect }) {
   );
 }
 
-function CategoryTable({ category, tools, expandedTool, setExpandedTool, approving, onApprove, rejecting, onReject }) {
+function CategoryTable({ category, tools, expandedTool, setExpandedTool, approving, onApprove, rejecting, onReject, isAdmin }) {
   return (
     <div>
       <div style={{

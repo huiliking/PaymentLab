@@ -13,6 +13,9 @@ __pycache__/
 *.db-wal
 *.sqlite3
 
+# Cross-process lock sidecar for registry.json (tool_registry.py)
+*.lock
+
 # Node
 node_modules/
 dist/

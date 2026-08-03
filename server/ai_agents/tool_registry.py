@@ -27,8 +27,57 @@ MCP Compatibility:
 
 import json
 import os
+import sys
 import tempfile
 from typing import Any, Dict, List, Optional
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
+
+
+class _CrossProcessLock:
+    """
+    Exclusive file lock usable across OS processes — e.g. multiple gunicorn
+    workers on Render (Linux), each with their own in-memory ToolRegistry.
+    A threading.Lock only synchronizes within one process, so it can't
+    prevent one worker's write from silently overwriting another's.
+
+    Locks a sidecar `<registry>.lock` file rather than registry.json itself,
+    since registry.json gets swapped out via os.replace() during _persist().
+
+    Windows (dev) uses msvcrt.locking; POSIX (Render) uses fcntl.flock.
+    """
+
+    def __init__(self, path: str):
+        self._path = path
+        self._fh = None
+
+    def __enter__(self):
+        self._fh = open(self._path, "a+b")
+        if sys.platform == "win32":
+            self._fh.seek(0, os.SEEK_END)
+            if self._fh.tell() == 0:
+                # msvcrt.locking needs at least one byte to lock.
+                self._fh.write(b"\0")
+                self._fh.flush()
+            self._fh.seek(0)
+            msvcrt.locking(self._fh.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            if sys.platform == "win32":
+                self._fh.seek(0)
+                msvcrt.locking(self._fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._fh.close()
+        return False
 
 
 class ToolRegistry:
@@ -53,6 +102,7 @@ class ToolRegistry:
             registry_path: Path to registry.json
         """
         self._registry_path = registry_path
+        self._lock_path = registry_path + ".lock"
         self._data = {}
         self._tools_by_name = {}
         self._tools_by_category = {}
@@ -302,6 +352,11 @@ class ToolRegistry:
         anything else would skip the human-approval step this endpoint
         exists to enforce.
 
+        The whole read-check-write cycle runs under the cross-process lock
+        and reloads from disk first, so a concurrent write from another
+        gunicorn worker (which has its own in-memory copy of self._data)
+        can't be silently lost — see _CrossProcessLock.
+
         Returns the stored tool dict, or {"error": ...} if invalid.
         """
         missing = [f for f in self.REQUIRED_TOOL_FIELDS if f not in tool_dict]
@@ -311,39 +366,49 @@ class ToolRegistry:
         if tool_dict["status"] != "proposed":
             return {"error": f"New tools must be proposed with status 'proposed', got '{tool_dict['status']}'"}
 
-        if tool_dict["category"] not in self._categories_by_id:
-            return {"error": f"Unknown category: {tool_dict['category']}"}
+        with _CrossProcessLock(self._lock_path):
+            self.load()
 
-        if tool_dict["name"] in self._tools_by_name:
-            return {"error": f"Tool '{tool_dict['name']}' already exists in registry"}
+            if tool_dict["category"] not in self._categories_by_id:
+                return {"error": f"Unknown category: {tool_dict['category']}"}
 
-        self._data["tools"].append(tool_dict)
-        self._persist()
-        return tool_dict
+            if tool_dict["name"] in self._tools_by_name:
+                return {"error": f"Tool '{tool_dict['name']}' already exists in registry"}
+
+            self._data["tools"].append(tool_dict)
+            self._persist()
+            return tool_dict
 
     def update_status(self, name: str, new_status: str) -> Dict:
         """
         Update a tool's status (e.g. "proposed" -> "candidate") and persist.
         Only transitions listed in VALID_STATUS_TRANSITIONS are allowed.
 
+        Reloads from disk under the cross-process lock before checking the
+        current status and writing, for the same lost-update reason as
+        propose_tool().
+
         Returns the updated tool dict, or {"error": ...} if not found or
         the transition isn't allowed from the tool's current status.
         """
-        tool = self._tools_by_name.get(name)
-        if not tool:
-            return {"error": f"Unknown tool: {name}"}
+        with _CrossProcessLock(self._lock_path):
+            self.load()
 
-        current_status = tool["status"]
-        allowed = self.VALID_STATUS_TRANSITIONS.get(current_status, set())
-        if new_status not in allowed:
-            return {
-                "error": f"Cannot transition '{name}' from '{current_status}' to '{new_status}'. "
-                         f"Allowed from '{current_status}': {sorted(allowed) or 'none'}"
-            }
+            tool = self._tools_by_name.get(name)
+            if not tool:
+                return {"error": f"Unknown tool: {name}"}
 
-        tool["status"] = new_status
-        self._persist()
-        return self._tools_by_name[name]
+            current_status = tool["status"]
+            allowed = self.VALID_STATUS_TRANSITIONS.get(current_status, set())
+            if new_status not in allowed:
+                return {
+                    "error": f"Cannot transition '{name}' from '{current_status}' to '{new_status}'. "
+                             f"Allowed from '{current_status}': {sorted(allowed) or 'none'}"
+                }
+
+            tool["status"] = new_status
+            self._persist()
+            return self._tools_by_name[name]
 
     # ── Registry Metadata ──────────────────────────────────────────────────
 

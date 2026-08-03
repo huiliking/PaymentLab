@@ -12,6 +12,7 @@ from flask import Blueprint, request, jsonify, current_app
 import sys
 import os
 import threading
+import hmac
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -34,6 +35,11 @@ DB_PATH = os.environ.get(
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 
+# Shared secret gating the registry-mutating endpoints (propose/approve/reject).
+# Not set locally by default -- until PAYMENTLAB_ADMIN_KEY is exported, those
+# three routes reject every request, which is the safe default.
+PAYMENTLAB_ADMIN_KEY = os.environ.get("PAYMENTLAB_ADMIN_KEY")
+
 # Tool registry — shared instance, loaded once
 REGISTRY_PATH = os.environ.get(
     "TOOL_REGISTRY_PATH",
@@ -53,6 +59,29 @@ _investigation_state = {"txn_id": None}
 # Serializes registry.json writes (scanner proposals, dashboard approvals) —
 # same rationale as _investigation_lock, applied to the shared JSON file.
 _registry_lock = threading.Lock()
+
+
+def _require_admin():
+    """
+    Checks the 'Authorization: Bearer <key>' header on registry-mutating
+    requests against PAYMENTLAB_ADMIN_KEY. Returns None if authorized, or a
+    (response, status_code) tuple to return immediately if not.
+
+    Uses hmac.compare_digest instead of == so a mistyped key doesn't leak
+    timing information about how many leading characters matched.
+    """
+    if not PAYMENTLAB_ADMIN_KEY:
+        return jsonify({"error": "Admin auth is not configured on this server"}), 401
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return jsonify({"error": "Missing bearer token"}), 401
+
+    token = auth_header[len("Bearer "):]
+    if not hmac.compare_digest(token, PAYMENTLAB_ADMIN_KEY):
+        return jsonify({"error": "Invalid admin key"}), 401
+
+    return None
 
 
 @fraud_bp.route('/fraud/transactions', methods=['GET'])
@@ -324,6 +353,10 @@ def propose_tools():
     registry with status="proposed". Body: JSON array of tool dicts
     (see ai_agents/tool_scanner.py output format).
     """
+    auth_error = _require_admin()
+    if auth_error:
+        return auth_error
+
     proposals = request.get_json(silent=True)
     if not isinstance(proposals, list):
         return jsonify({"error": "Request body must be a JSON array of tool proposals"}), 400
@@ -361,6 +394,10 @@ def _status_transition_response(result):
 @fraud_bp.route('/fraud/tools/<tool_name>/approve', methods=['POST'])
 def approve_tool(tool_name):
     """Approve a proposed tool: flips status from 'proposed' to 'candidate'."""
+    auth_error = _require_admin()
+    if auth_error:
+        return auth_error
+
     if not _registry_lock.acquire(blocking=False):
         return jsonify({"error": "Registry is being updated by another request, try again"}), 409
 
@@ -374,6 +411,10 @@ def approve_tool(tool_name):
 @fraud_bp.route('/fraud/tools/<tool_name>/reject', methods=['POST'])
 def reject_tool(tool_name):
     """Dismiss a proposed tool: flips status to 'rejected' (non-destructive)."""
+    auth_error = _require_admin()
+    if auth_error:
+        return auth_error
+
     if not _registry_lock.acquire(blocking=False):
         return jsonify({"error": "Registry is being updated by another request, try again"}), 409
 
