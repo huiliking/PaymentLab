@@ -1,13 +1,15 @@
 # Sprint 4 Test Report — Auth, Roles & Deployment Hardening
 
-**Run date:** 2026-07-28
-**Executed against:** `master` @ working tree with Sprint 4 changes (uncommitted at time of test)
+**Run date:** 2026-07-28, follow-up 2026-08-02
+**Executed against:** `master` @ commit `726e780` (Sprint 4 changes; report itself was written before that commit landed)
 **Environment:** Windows 11 dev machine, Flask dev server (`python app.py`), Vite dev client, curl + browser automation
 **Procedure followed:** `SPRINT4_TEST_PLAN.md`, all 6 phases
 
 ## Result: PASS
 
 All 12 validation criteria from `sprint4-handover.md` hold. One design nuance and one environment quirk are called out below — neither is a defect in the Sprint 4 changes themselves.
+
+**2026-08-02 follow-up:** an external review of this report (via claude.chat) flagged that Phase 3.1's first pass didn't actually exercise the code path it claimed to test, that the Phase 6 deferral read as optional rather than required, that the single-shared-admin-key trade-off wasn't written down anywhere, and that the test plan's own inline comment still had the "400ish" wording even though the pass-criteria line had been corrected. All four addressed: 3.1 was re-run against a genuinely threaded instance and now confirms the intended lock-contention message (see Phase 3 below); Phase 6 language was strengthened to "hard gate"; the admin-key limitation is now `KNOWN_ISSUES.md` #4; the test plan's remaining "400ish" comment was fixed. WSL2 was suggested for locally exercising the untested `fcntl` branch — not installed as part of this follow-up since it requires enabling a Windows feature and a restart; deferred to the user's call.
 
 ---
 
@@ -43,13 +45,14 @@ active=9  candidate=24  proposed=4  rejected=1  total=38
 | 2.6 | Approve/reject an unknown tool name | **PASS** — 404 `"Unknown tool: does_not_exist"` |
 | 2.7 | Cleanup | **PASS** — both test tools removed, registry back to baseline |
 
-**Design nuance found (update test plan wording):** `/propose` always returns **HTTP 200** at the top level, even when every proposal in the batch fails — errors are reported per-item in the `errors` array (`stored: []`, `errors: [...]`). This is correct batch-endpoint behavior (some proposals in a batch can succeed while others fail), just not literally "400" as originally described in the test plan. No code change needed; the plan doc's wording was imprecise, not the endpoint.
+**Design nuance found, corrected in `SPRINT4_TEST_PLAN.md`:** `/propose` always returns **HTTP 200** at the top level, even when every proposal in the batch fails — errors are reported per-item in the `errors` array (`stored: []`, `errors: [...]`). This is correct batch-endpoint behavior (some proposals in a batch can succeed while others fail), just not literally "400" as originally described in the test plan. No code change needed; the plan doc's wording was imprecise, not the endpoint.
 
 ## Phase 3 — Cross-process lock
 
 | # | Check | Result |
 |---|---|---|
-| 3.1 | Two near-simultaneous requests to the same running process | **PASS, with a caveat** — one 200, one 409, but via the *invalid-transition* path (`"Cannot transition ... from 'candidate' to 'candidate'"`), not the *"Registry is being updated by another request"* lock-contention message. The Flask dev server (`app.run(debug=True, port=5000)`, no `threaded=True`) processes requests one at a time by default, so the two curl calls landed sequentially rather than truly overlapping inside the same process — the `threading.Lock` fast-fail path in `fraud.py` was never actually contended. **Either way, the outcome is safe** (no double-approve, no corruption) because `update_status()` reloads fresh state before checking the transition. This is a property of the dev server's concurrency model, not a defect; the fast-fail 409 message would be reachable under `threaded=True` or gunicorn with multiple threads/workers. |
+| 3.1 (first pass) | Two near-simultaneous requests to the same running process, default dev server | **Inconclusive as a test of the intended path** — one 200, one 409, but via the *invalid-transition* path (`"Cannot transition ... from 'candidate' to 'candidate'"`), not the *"Registry is being updated by another request"* lock-contention message. The Flask dev server (`app.run(debug=True, port=5000)`, no `threaded=True`) processes requests one at a time by default, so the two curl calls landed sequentially rather than truly overlapping inside the same process — the `threading.Lock` fast-fail path in `fraud.py` was never actually contended. The outcome was still safe (no double-approve, no corruption), just not proof of the specific code path 3.1 is meant to test. |
+| 3.1 (follow-up, 2026-08-02) | Same check, against a throwaway `threaded=True` instance, two genuinely concurrent requests fired from two Python threads released by a shared `threading.Barrier` | **PASS** — `[409] {"error":"Registry is being updated by another request, try again"}` and `[200] {"tool": {..., "status": "candidate"}}`. The lock-contention message is confirmed reachable; it just needs a concurrency-capable server (`threaded=True` or gunicorn) to trigger, which the plain dev server isn't. `SPRINT4_TEST_PLAN.md` Phase 3.1 was updated with this procedure so future re-runs don't repeat the false negative. |
 | 3.2 | Real cross-process concurrency (`_test_concurrent_lock.py`) | **PASS** — run twice for confirmation. Two independent OS processes, synchronized via `multiprocessing.Barrier`, called `propose_tool()` simultaneously for distinct dummy tools. Both writes survived, `registry.json` stayed valid JSON, `.lock` sidecar file was created. Exit code 0 both runs. **This is the test that actually proves the KNOWN_ISSUES.md #1 lost-update race is fixed** — reproduces the exact scenario (separate processes, each with their own in-memory `ToolRegistry`) that a same-process test cannot. |
 | 3.3 | `.lock` sidecar file gitignored | **PASS** — confirmed present in `.gitignore` (`*.lock`), file removed from working tree after each test run |
 
@@ -79,9 +82,11 @@ Ran against a fresh client (`npm run dev`) + fresh server pair, localStorage cle
 
 ## Phase 6 — Deployment note
 
-Not executable locally, as expected — flagged for a post-deploy check:
+Not executable locally as of this report — but **treat the `fcntl` check below as a hard gate before relying on the lock in production, not an optional nice-to-have.** It's the only lock code path Render actually runs.
+
 - `PAYMENTLAB_ADMIN_KEY` needs its own value set as a Render env var (the dev `.env` value must not be reused there).
-- The POSIX (`fcntl.flock`) branch of `_CrossProcessLock` only runs on Linux; Phase 3 here only exercised the Windows (`msvcrt`) branch. Recommend firing two near-simultaneous approve clicks against the live Render URL once deployed, as a real-world sanity check of the untested branch.
+- The POSIX (`fcntl.flock`) branch of `_CrossProcessLock` only runs on Linux; every local run in this report (including the corrected 3.1) only exercised the Windows (`msvcrt`) branch. `fcntl` is genuinely untested code as of this report.
+- **Curl-against-a-live-URL is a weak substitute for this.** Two near-simultaneous `curl` calls against a deployed Render URL can get serialized by network latency or dyno scheduling before they ever reach the lock — a "pass" there doesn't carry the same weight as `_test_concurrent_lock.py`'s local barrier-synchronized processes, which guarantee true overlap. If a curl-based check against the live URL passes, treat it as weak positive evidence, not proof. Stronger options: run `_test_concurrent_lock.py`'s approach against two genuinely concurrent gunicorn workers (closest to the real deployment topology), or exercise the `fcntl` branch locally via WSL2 or a Linux container before ever depending on it in production. See `KNOWN_ISSUES.md` #5.
 
 ---
 
@@ -99,3 +104,4 @@ Mid-test, the dev server process bound to port 5000 became unresponsive to proce
 - `registry.json.lock` sidecar removed after each concurrency test run.
 - `server/.env`'s `PAYMENTLAB_ADMIN_KEY` line restored after the Phase 1.5 isolated-instance test.
 - Final state verified to exactly match the Phase 0 baseline; `git status` shows no diff on `registry.json` or `.env`.
+- **2026-08-02 follow-up:** `ransomware_attack` reverted from `candidate` back to `proposed` (touched during the corrected Phase 3.1 re-run); throwaway `server/_phase31_runner.py` and `_phase31_race.py` deleted after use; registry re-confirmed at the exact Phase 0 baseline (`active=9 candidate=24 proposed=4 rejected=1 total=38`).

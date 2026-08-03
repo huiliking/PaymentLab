@@ -5,6 +5,12 @@ code review before commit; the fixes below were deferred as lower priority
 than the correctness bugs that were fixed in the same pass (see git log for
 that commit's message).
 
+**Issues 1–3 below were fixed in Sprint 4** (commit `726e780`,
+`server/ai_agents/SPRINT4_TEST_REPORT.md` has the validation results) —
+left in place as a historical record of what the fix addressed. See
+"Known Limitations" at the bottom for what Sprint 4 deliberately left
+unresolved.
+
 ## 1. `_registry_lock` doesn't synchronize across multiple processes
 
 `server/routes/fraud.py` uses a `threading.Lock` to serialize writes to
@@ -56,3 +62,53 @@ into a category.
 overview grid cards (count only tools matching `selectedStatus` per
 category), or disable/hide the status filter while on the "All Categories"
 view so it doesn't imply functionality that isn't there.
+
+---
+
+# Known Limitations — Sprint 4 (auth, roles, registry lock)
+
+Not bugs — deliberate simplifications per the "keep it simple, this is a
+portfolio project, not a production SaaS platform" design goal in
+`sprint4-handover.md`. Documented here so they read as known trade-offs
+if rediscovered later, not as surprises.
+
+## 4. Single shared admin key, no rotation or per-user identity
+
+`PAYMENTLAB_ADMIN_KEY` is one shared secret for anyone who should have
+admin access — there's no per-user identity, no ability to revoke one
+person's access without rotating the key for everyone, and no audit
+trail of *which* admin approved/rejected a given tool. This matches the
+handover's explicit "no user management system" scope for this sprint.
+
+The key is also **stored in `localStorage` on whatever browser signs
+in** (`client/src/utils/api.js`), readable by anything with devtools
+access to that browser/machine — script injection, a shared/public
+computer, or browser extensions with broad permissions could read it.
+Given the threat model here (closing the "anyone with curl" gap from
+issue #2, not defending against a compromised admin's own machine), this
+is an accepted trade-off, not a defect.
+
+**If this ever needs to change:** move toward per-user sessions/API keys
+(even a simple one-key-per-admin lookup table would remove the "rotate
+for everyone" problem) before this app handles anything more sensitive
+than a demo tool registry.
+
+## 5. Post-deploy verification of the POSIX lock branch is a hard gate, not optional
+
+`_CrossProcessLock` in `server/ai_agents/tool_registry.py` has two
+branches: `msvcrt.locking` (Windows, exercised locally via
+`_test_concurrent_lock.py`) and `fcntl.flock` (POSIX/Render). Only the
+Windows branch has been run — the `fcntl` branch is untested code as of
+this sprint's local validation.
+
+**Treat verifying the `fcntl` branch on Render as required before
+depending on the lock in production**, not a nice-to-have follow-up. Two
+near-simultaneous `curl` calls against a live Render URL are a weaker
+test than `_test_concurrent_lock.py`'s local barrier-synchronized
+processes — network latency and dyno scheduling can serialize what looks
+like a race without actually contending the lock, so a "pass" there
+doesn't carry the same weight as the local multiprocessing test. If
+stronger confidence is needed before relying on this in production,
+either test with two genuinely concurrent gunicorn workers directly
+(closer to the real deployment topology) or exercise the `fcntl` branch
+locally via WSL2/a Linux container.

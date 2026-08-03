@@ -100,7 +100,9 @@ curl -s -w '\n%{http_code}\n' -X POST http://localhost:5000/api/fraud/tools/zz_t
 curl -s -w '\n%{http_code}\n' -X POST http://localhost:5000/api/fraud/tools/zz_test_tool_b/reject \
   -H "Authorization: Bearer $KEY"
 
-# 2.4 — missing required fields -> 400ish error listing them
+# 2.4 — missing required fields -> HTTP 200 at the top level (batch
+# endpoint), with the missing-fields error listed in the response's
+# "errors" array, not a top-level 400
 curl -s -w '\n%{http_code}\n' -X POST http://localhost:5000/api/fraud/tools/propose \
   -H "Content-Type: application/json" -H "Authorization: Bearer $KEY" \
   -d '[{"name":"zz_incomplete"}]'
@@ -152,9 +154,32 @@ concurrent-process run to prove.
 
 **3.1 — same-process fast-fail (regression check, unchanged from Sprint 3):**
 
-Fire two approve requests back-to-back against a tool that's actually
-`proposed`; expect one 200 and one 409 `"Registry is being updated by
-another request, try again"`.
+**This requires a threaded server** — the default `python app.py` dev
+server (`app.run(debug=True, port=5000)`, no `threaded=True`) handles one
+request at a time, so two curl calls fired back-to-back get processed
+*sequentially*, not concurrently. Against that config, both calls will
+land after the first has already fully committed, and the second 409s
+via the invalid-transition path (`"Cannot transition ... from 'candidate'
+to 'candidate'"`) instead of the lock-contention path — a false negative
+for this specific check (the registry is still safe either way, just via
+a different code path than 3.1 is meant to exercise).
+
+To actually reach the `threading.Lock` fast-fail message, run a throwaway
+instance with `threaded=True`:
+
+```python
+# server/_phase31_runner.py (throwaway — delete after use)
+from app import create_app
+app = create_app()
+app.run(port=5552, debug=False, threaded=True)
+```
+
+Then fire two requests that are genuinely concurrent (not just
+back-to-back) — e.g. two Python threads released by a shared
+`threading.Barrier`, both `POST`ing `/api/fraud/tools/<a-proposed-tool>/approve`
+at the same instant. Expect one 200 and one 409
+`"Registry is being updated by another request, try again"`. Revert the
+tool's status and delete the throwaway script/log afterward.
 
 **3.2 — actual cross-process test:**
 
