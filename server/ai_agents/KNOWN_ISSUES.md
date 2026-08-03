@@ -8,8 +8,9 @@ that commit's message).
 **Issues 1–3 below were fixed in Sprint 4** (commit `726e780`,
 `server/ai_agents/SPRINT4_TEST_REPORT.md` has the validation results) —
 left in place as a historical record of what the fix addressed. See
-"Known Limitations" at the bottom for what Sprint 4 deliberately left
-unresolved.
+"Known Limitations" at the bottom: #4 is an accepted design trade-off,
+#5 was a real testing gap that's since been closed (2026-08-02, via
+WSL2).
 
 ## 1. `_registry_lock` doesn't synchronize across multiple processes
 
@@ -93,22 +94,31 @@ is an accepted trade-off, not a defect.
 for everyone" problem) before this app handles anything more sensitive
 than a demo tool registry.
 
-## 5. Post-deploy verification of the POSIX lock branch is a hard gate, not optional
+## 5. [RESOLVED 2026-08-02] POSIX lock branch verified via WSL2
 
 `_CrossProcessLock` in `server/ai_agents/tool_registry.py` has two
 branches: `msvcrt.locking` (Windows, exercised locally via
-`_test_concurrent_lock.py`) and `fcntl.flock` (POSIX/Render). Only the
-Windows branch has been run — the `fcntl` branch is untested code as of
-this sprint's local validation.
+`_test_concurrent_lock.py`) and `fcntl.flock` (POSIX/Render). Originally
+only the Windows branch had been run — the `fcntl` branch was untested
+code as of the Sprint 4 commit.
 
-**Treat verifying the `fcntl` branch on Render as required before
-depending on the lock in production**, not a nice-to-have follow-up. Two
-near-simultaneous `curl` calls against a live Render URL are a weaker
-test than `_test_concurrent_lock.py`'s local barrier-synchronized
-processes — network latency and dyno scheduling can serialize what looks
-like a race without actually contending the lock, so a "pass" there
-doesn't carry the same weight as the local multiprocessing test. If
-stronger confidence is needed before relying on this in production,
-either test with two genuinely concurrent gunicorn workers directly
-(closer to the real deployment topology) or exercise the `fcntl` branch
-locally via WSL2/a Linux container.
+**Update:** ran `_test_concurrent_lock.py` for real under WSL2 Ubuntu
+(`sys.platform != "win32"`, so the actual `fcntl.flock` path executes,
+not a Windows fallback). Result: both concurrent writes from separate OS
+processes survived, `registry.json` stayed valid JSON, the `.lock`
+sidecar was created — same pass criteria as the Windows run, now
+confirmed on the code path Render actually runs. See
+`SPRINT4_TEST_REPORT.md` for the full log.
+
+**Residual caveat, worth a lightweight sanity check post-deploy (no
+longer a hard gate, but not nothing):** WSL2 is a single Linux VM running
+two OS processes — closer to gunicorn's real multi-worker-process model
+than the Windows test was, but still not identical to Render's actual
+topology (separate worker processes under one gunicorn master, behind
+Render's own scheduling). If it's ever worth the extra confidence, two
+genuinely concurrent gunicorn workers is the closest local approximation
+to production. Two near-simultaneous `curl` calls against a *live*
+Render URL, by contrast, remain a weak test on their own — network
+latency and dyno scheduling can serialize what looks like a race without
+ever contending the lock, so a "pass" there shouldn't be read as strong
+evidence either way.

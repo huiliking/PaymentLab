@@ -201,6 +201,24 @@ diagnostic if anything is lost or corrupted.
 **Pass criteria:** exits 0, both dummy tools present, `registry.json`
 still valid JSON, `.lock` sidecar file was created next to it.
 
+**Note:** this only exercises `msvcrt.locking` on Windows. To exercise
+the actual `fcntl.flock` branch Render runs, run the same script under
+WSL2 Ubuntu (`wsl --install` if not already set up) or a Linux
+container — same command, same pass criteria. Confirmed working via
+WSL2 on 2026-08-02 (see `KNOWN_ISSUES.md` #5 and
+`SPRINT4_TEST_REPORT.md`). One gotcha hit doing this: create the venv on
+WSL's native filesystem (e.g. `~/venv-linux`), not on the
+Windows-mounted `/mnt/c/...` path — venvs created directly on `/mnt/c`
+fail with an `ensurepip` error due to a known WSL/DrvFs symlink
+limitation. `pip install -r requirements.txt` can still point at the
+Windows-mounted `server/requirements.txt` once the venv itself is native.
+Also delete the leftover `registry.json.lock` afterward — the script
+cleans up its dummy tools but not its own lock file — and if
+`registry.json` shows as modified in `git status` afterward with an
+empty `git diff`, that's just an LF/CRLF line-ending artifact from being
+rewritten by Linux Python; `git checkout -- registry.json` discards it
+safely.
+
 ## Phase 4 — Dashboard role gating (browser)
 
 With the server running and the client dev server up (`npm run dev` in
@@ -246,13 +264,17 @@ With the server running and the client dev server up (`npm run dev` in
 
 ## Phase 6 — Deployment note (Render)
 
-Not executable locally:
-
 1. `PAYMENTLAB_ADMIN_KEY` must be set as its own Render environment
    variable — the value in local `server/.env` is dev-only and should not
-   be reused there.
+   be reused there. Not executable/verifiable locally.
 2. The POSIX branch of `_CrossProcessLock` (`fcntl.flock`) only runs on
-   Linux — Windows dev exercises the `msvcrt` branch instead (covered by
-   Phase 3). Sanity-check the Render deployment specifically once it's
-   live, e.g. by firing two near-simultaneous approve clicks against the
-   deployed dashboard and confirming both survive.
+   Linux. **This is now covered locally** — run Phase 3.2 under WSL2
+   Ubuntu (see the note there) instead of, or in addition to, Windows.
+   What's *not* reproduced locally is gunicorn's actual multi-worker
+   topology on Render; if that extra confidence is ever wanted, test
+   against two genuinely concurrent gunicorn workers directly. Don't
+   rely on two near-simultaneous curl calls against the live Render URL
+   as the check — network latency and dyno scheduling can serialize what
+   looks like a race without the lock ever actually being contended, so
+   a "pass" there is weak evidence at best, not a substitute for the
+   WSL2/gunicorn-worker style tests above.
