@@ -581,15 +581,20 @@ class FraudInvestigator:
     falls back to Ollama (llama3.2) otherwise.
     """
     
-    def __init__(self, db_path="payment_lab.db", ollama_url="http://localhost:11434", 
+    def __init__(self, db_path="payment_lab.db", ollama_url="http://localhost:11434",
                  model="llama3.2", max_steps=6, registry_path=None, backend="ollama",
-                 metering_service=None):
+                 metering_service=None, allowed_tools=None):
         """
         Args:
             backend: "auto" (Claude if key exists, else Ollama),
                      "ollama" (force Ollama even if key exists),
                      "claude" (force Claude, error if no key)
             metering_service: MeteringService instance for usage tracking (optional)
+            allowed_tools: Optional list[str] of tool names this investigation
+                may use — the merchant's tier grants, resolved by the business
+                layer before this object is constructed. None = no restriction
+                (all active tools), which preserves pre-Sprint-5 behavior for
+                CLI usage and any caller that hasn't resolved a merchant.
         """
         print(f"\n  {'='*55}")
         print(f"  FRAUD INVESTIGATOR - BOOT SEQUENCE")
@@ -603,6 +608,7 @@ class FraudInvestigator:
         self.max_steps = max_steps
         self.db_path = db_path
         self.meter = metering_service
+        self.allowed_tools = allowed_tools
         print(f"  [BOOT 1/3] Database: {db_path}")
 
         # Phase 2: Tool registry
@@ -617,6 +623,8 @@ class FraudInvestigator:
         print(f"  [BOOT 2/3] Registry: {registry_path}")
         print(f"             {self.registry}")
         print(f"             Active tools: {', '.join(t['name'] for t in active_tools)}")
+        if allowed_tools is not None:
+            print(f"             Merchant tool grant: {', '.join(allowed_tools) or '(none)'}")
 
         # Phase 3: Backend selection
         api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -650,11 +658,29 @@ class FraudInvestigator:
                 print(f"  [BOOT 3/3] Backend: Ollama ({model}) - {reason}")
 
         print(f"  {'='*55}\n")
-    
-    def investigate(self, txn_id):
+
+    def _dispatch(self, tool_name, params):
+        """
+        Execute a tool call, enforcing the merchant's tier grant server-side
+        — the schemas Claude/Ollama were offered already exclude tools
+        outside allowed_tools, but this is the actual gate: it's checked
+        against every tool call that reaches dispatch, not just what the
+        LLM was shown, so a hallucinated or out-of-grant call can't execute.
+        """
+        if self.allowed_tools is not None and tool_name not in self.allowed_tools:
+            return {"error": f"Tool '{tool_name}' is not granted for this merchant's tier"}
+        return self.registry.execute(tool_name, params, self.tools)
+
+    def investigate(self, txn_id, customer_id=None):
         """
         Main entry point. Runs full investigation on a transaction.
         Returns InvestigationReport.
+
+        Args:
+            customer_id: Merchant identifier for metering (the merchant's
+                registration_id, resolved by the caller). Falls back to
+                "unknown_merchant" for callers that haven't resolved one
+                (e.g. CLI usage without merchant context).
         """
         report = InvestigationReport(
             transaction_id=txn_id,
@@ -663,8 +689,8 @@ class FraudInvestigator:
 
         # Metering: one session per investigation
         self._session_id = str(uuid.uuid4())
-        self._customer_id = "demo_merchant"  # TODO: thread real customer ID from API route
-        
+        self._customer_id = customer_id or "unknown_merchant"
+
         print(f"\n{'='*60}")
         print(f"FRAUD INVESTIGATION: {txn_id}")
         print(f"{'='*60}")
@@ -713,7 +739,7 @@ class FraudInvestigator:
 
         # Phase 1-N: LLM investigation loop
         backend_name = "Claude API" if self.use_claude else f"Ollama ({self.model})"
-        schemas = self.registry.get_schemas()
+        schemas = self.registry.get_schemas(allowed=self.allowed_tools)
         print(f"\n[PHASE 1] Starting {backend_name} investigation (FAA Plan→Gather→Analyze)")
         print(f"  [REGISTRY] {len(schemas)} active tools loaded: {', '.join(s['name'] for s in schemas)}")
 
@@ -784,7 +810,7 @@ class FraudInvestigator:
             consecutive_skips = 0
             print(f"  [GATHER] Calling {tool_name}({tool_params})")
             print(f"  [REGISTRY] Dispatching → registry.execute('{tool_name}', ..., tools_instance)")
-            tool_result = self.registry.execute(tool_name, tool_params, self.tools)
+            tool_result = self._dispatch(tool_name, tool_params)
 
             if "error" in tool_result:
                 print(f"  [REGISTRY] Error: {tool_result['error']}")
@@ -817,13 +843,12 @@ class FraudInvestigator:
             # When address_history reveals high card reuse, auto-trigger the graph.
             if (tool_name == "get_address_history"
                     and tool_result.get("unique_cards", 0) >= 5
-                    and "check_identity_graph" not in context["tools_called"]):
+                    and "check_identity_graph" not in context["tools_called"]
+                    and (self.allowed_tools is None or "check_identity_graph" in self.allowed_tools)):
                 txn_id = context["transaction"].get("id", "")
                 print(f"  [ESCALATE] Address reused by {tool_result['unique_cards']} cards "
                       f"→ auto-calling check_identity_graph")
-                graph_result = self.registry.execute(
-                    "check_identity_graph", {"txn_id": txn_id}, self.tools
-                )
+                graph_result = self._dispatch("check_identity_graph", {"txn_id": txn_id})
                 report.tool_results["check_identity_graph"] = graph_result
                 context["tools_called"].append("check_identity_graph")
                 context["evidence_gathered"].append({
@@ -846,12 +871,11 @@ class FraudInvestigator:
                     print(f"  [EVIDENCE] {graph_evidence.risk_signal}: {graph_evidence.finding}")
 
         # ── Mandatory fallback: always run identity graph if Ollama skipped it ──
-        if "check_identity_graph" not in context["tools_called"]:
+        if ("check_identity_graph" not in context["tools_called"]
+                and (self.allowed_tools is None or "check_identity_graph" in self.allowed_tools)):
             txn_id = context["transaction"].get("id", "")
             print(f"  [FALLBACK] Ollama never called check_identity_graph → auto-calling")
-            graph_result = self.registry.execute(
-                "check_identity_graph", {"txn_id": txn_id}, self.tools
-            )
+            graph_result = self._dispatch("check_identity_graph", {"txn_id": txn_id})
             report.tool_results["check_identity_graph"] = graph_result
             context["tools_called"].append("check_identity_graph")
             context["evidence_gathered"].append({
@@ -955,7 +979,7 @@ class FraudInvestigator:
                     max_tokens=1024,
                     cache_control={"type": "ephemeral"},
                     system=system_prompt,
-                    tools=self.registry.get_schemas(),  # ← loaded from registry.json
+                    tools=self.registry.get_schemas(allowed=self.allowed_tools),  # ← loaded from registry.json, tier-filtered
                     messages=messages
                 )
             except Exception as e:
@@ -1055,7 +1079,7 @@ class FraudInvestigator:
                 print(f"  [REGISTRY] Dispatching → registry.execute('{tool_name}', ..., tools_instance)")
                 params = tool_input
 
-                tool_result = self.registry.execute(tool_name, params, self.tools)
+                tool_result = self._dispatch(tool_name, params)
 
                 if "error" in tool_result:
                     print(f"  [REGISTRY] Error: {tool_result['error']}")
@@ -1138,7 +1162,7 @@ class FraudInvestigator:
         # Build available tools description from registry
         tool_desc = "\n".join([
             f"- {t['name']}: {t['description']} (params: {', '.join(t['input_schema'].get('required', []))})"
-            for t in self.registry.get_schemas()
+            for t in self.registry.get_schemas(allowed=self.allowed_tools)
         ])
         
         # Build evidence summary — keep short to avoid timeouts on later iterations
@@ -1185,7 +1209,7 @@ class FraudInvestigator:
         
         # Build tool-priority guidance for Ollama
         tools_not_called = [
-            t['name'] for t in self.registry.get_schemas()
+            t['name'] for t in self.registry.get_schemas(allowed=self.allowed_tools)
             if t['name'] not in context["tools_called"]
         ]
         tools_not_called_str = ", ".join(tools_not_called) if tools_not_called else "all tools used"

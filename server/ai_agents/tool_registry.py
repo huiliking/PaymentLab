@@ -105,6 +105,7 @@ class ToolRegistry:
         self._lock_path = registry_path + ".lock"
         self._data = {}
         self._tools_by_name = {}
+        self._tools_by_id = {}
         self._tools_by_category = {}
         self._categories_by_id = {}
         self.load()
@@ -120,6 +121,10 @@ class ToolRegistry:
         # Index tools by name
         self._tools_by_name = {t["name"]: t for t in self._data["tools"]}
 
+        # Index tools by id — the immutable PK business-layer grants reference
+        # (name is a mutable label; renaming a tool must not break a grant).
+        self._tools_by_id = {t["tool_id"]: t for t in self._data["tools"] if "tool_id" in t}
+
         # Index tools by category
         self._tools_by_category = {}
         for tool in self._data["tools"]:
@@ -133,7 +138,7 @@ class ToolRegistry:
 
     # ── Schema Generation ──────────────────────────────────────────────────
 
-    def get_schemas(self, status: str = "active") -> List[Dict]:
+    def get_schemas(self, status: str = "active", allowed: Optional[List[str]] = None) -> List[Dict]:
         """
         Generate Claude API tool schemas.
 
@@ -143,13 +148,32 @@ class ToolRegistry:
         Args:
             status: Filter by status. "active" = only deployed tools.
                     "all" = include candidates (for testing).
+            allowed: Optional tool-name allowlist (business layer resolves
+                     a merchant's tier grants to this). None = no
+                     restriction, i.e. all tools matching `status`.
+                     Every name is validated against the live catalog —
+                     an unknown or inactive name raises rather than being
+                     silently dropped, since a grant referencing a
+                     tool that's disappeared or been deactivated since
+                     assignment is a business-facing bug, not a filter.
 
         Returns:
             List of tool schema dicts ready for the Anthropic API.
         """
+        if allowed is not None:
+            allowed = list(allowed)
+            unknown = [n for n in allowed if n not in self._tools_by_name]
+            if unknown:
+                raise ValueError(f"allowed list references unknown tool(s): {sorted(unknown)}")
+            inactive = [n for n in allowed if self._tools_by_name[n]["status"] != "active"]
+            if inactive:
+                raise ValueError(f"allowed list references inactive tool(s): {sorted(inactive)}")
+
         schemas = []
         for tool in self._data["tools"]:
             if status != "all" and tool["status"] != status:
+                continue
+            if allowed is not None and tool["name"] not in allowed:
                 continue
             schemas.append({
                 "name": tool["name"],
@@ -264,6 +288,14 @@ class ToolRegistry:
         """Get a single tool by name, or None if not found."""
         return self._tools_by_name.get(name)
 
+    def get_tool_by_id(self, tool_id: int) -> Optional[Dict]:
+        """
+        Get a single tool by its immutable tool_id, or None if not found.
+        This is the lookup the business layer uses to resolve tier_tools
+        grants — tool_id survives a name change, unlike get_tool(name).
+        """
+        return self._tools_by_id.get(tool_id)
+
     def get_active_tools(self) -> List[Dict]:
         """Shortcut for list_tools(status='active')."""
         return self.list_tools(status="active")
@@ -375,9 +407,18 @@ class ToolRegistry:
             if tool_dict["name"] in self._tools_by_name:
                 return {"error": f"Tool '{tool_dict['name']}' already exists in registry"}
 
+            # tool_id is registry-owned, not caller-supplied — assign (or
+            # reassign, ignoring any value the caller passed in) so ids
+            # stay unique and sequential regardless of proposal source.
+            tool_dict["tool_id"] = self._next_tool_id()
+
             self._data["tools"].append(tool_dict)
             self._persist()
             return tool_dict
+
+    def _next_tool_id(self) -> int:
+        existing_ids = [t["tool_id"] for t in self._data["tools"] if "tool_id" in t]
+        return max(existing_ids, default=0) + 1
 
     def update_status(self, name: str, new_status: str) -> Dict:
         """

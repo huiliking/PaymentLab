@@ -89,7 +89,8 @@
           "url": "https://arxiv.org/abs/2506.11635",
           "relevance": "Iterative Plan\u2192Gather\u2192Analyze investigation loop requires transaction context as the starting point"
         }
-      ]
+      ],
+      "tool_id": 1
     },
     {
       "name": "check_amount_anomaly",
@@ -116,7 +117,8 @@
           "url": "https://arxiv.org/abs/2509.09928",
           "relevance": "Most fraud is under $250; amount alone is not a signal, but anomaly relative to history is"
         }
-      ]
+      ],
+      "tool_id": 2
     },
     {
       "name": "check_3ds_result",
@@ -149,7 +151,8 @@
           "url": "https://www.europeanpaymentscouncil.eu/",
           "relevance": "Documents SCA bypass as an emerging threat category"
         }
-      ]
+      ],
+      "tool_id": 3
     },
     {
       "name": "get_email_history",
@@ -176,7 +179,8 @@
           "url": "https://arxiv.org/abs/2509.09928",
           "relevance": "Email-to-card graph linkage is a key signal for fraud ring detection"
         }
-      ]
+      ],
+      "tool_id": 4
     },
     {
       "name": "get_device_history",
@@ -208,7 +212,8 @@
           "url": "https://www.eba.europa.eu/",
           "relevance": "Device fingerprinting cited as key signal for CNP fraud detection"
         }
-      ]
+      ],
+      "tool_id": 5
     },
     {
       "name": "check_email_reputation",
@@ -241,7 +246,8 @@
           "url": "https://www.unit21.ai/",
           "relevance": "Email reputation is a standard enrichment step in commercial fraud platforms"
         }
-      ]
+      ],
+      "tool_id": 6
     },
     {
       "name": "check_phone_verification",
@@ -273,7 +279,8 @@
           "url": "https://www.pcisecuritystandards.org/",
           "relevance": "Multi-factor authentication requirements include phone verification as an identity signal"
         }
-      ]
+      ],
+      "tool_id": 7
     },
     {
       "name": "check_identity_graph",
@@ -328,7 +335,8 @@
           "url": "internal",
           "note": "1-2-3 Shibuya address shared by 14 cards + 10 emails \u2014 exact pattern this tool is designed to catch."
         }
-      ]
+      ],
+      "tool_id": 8
     },
     {
       "name": "get_card_history",
@@ -360,7 +368,8 @@
           "url": "https://www.europeanpaymentscouncil.eu/",
           "relevance": "Card-not-present fraud with velocity patterns is the #1 payment fraud type in Europe"
         }
-      ]
+      ],
+      "tool_id": 9
     },
     {
       "name": "check_velocity",
@@ -397,7 +406,8 @@
           "url": "https://github.com/huiliking/PaymentLab",
           "relevance": "Amount escalation $15\u2192$99 detected via velocity analysis"
         }
-      ]
+      ],
+      "tool_id": 10
     },
     {
       "name": "check_bin_lookup",
@@ -429,7 +439,8 @@
           "url": "https://www.eba.europa.eu/",
           "relevance": "BIN-level data provides more reliable card country than self-reported billing address"
         }
-      ]
+      ],
+      "tool_id": 11
     },
     {
       "name": "check_card_testing_pattern",
@@ -466,7 +477,8 @@
           "url": "https://www.europeanpaymentscouncil.eu/",
           "relevance": "Card testing is a precursor to large-scale CNP fraud"
         }
-      ]
+      ],
+      "tool_id": 12
     },
     {
       "name": "check_locale_consistency",
@@ -498,7 +510,8 @@
           "url": "https://arxiv.org/abs/2506.11635",
           "relevance": "Geographic consistency is one of the key investigation dimensions"
         }
-      ]
+      ],
+      "tool_id": 13
     },
     {
       "name": "get_ip_reputation",
@@ -525,7 +538,8 @@
           "url": "https://github.com/huiliking/PaymentLab",
           "relevance": "IP geolocation mismatch (US\u2192JP) in 11 minutes was a key fraud signal"
         }
-      ]
+      ],
+      "tool_id": 14
     },
     {
       "name": "check_ip_geolocation",
@@ -553,7 +567,8 @@
           "url": "https://www.maxmind.com/en/geoip2-services-and-databases",
           "relevance": "Industry standard for IP geolocation in fraud detection"
         }
-      ]
+      ],
+      "tool_id": 15
     },
     {
       "name": "check_travel_feasibility",
@@ -595,7 +610,8 @@
           "url": "https://www.taktile.com/",
           "relevance": "Impossible travel is a standard feature in commercial fraud decisioning platforms"
         }
-      ]
+      ],
+      "tool_id": 16
     },
     {
       "name": "get_address_history",
@@ -627,7 +643,8 @@
           "url": "https://www.eba.europa.eu/",
           "relevance": "Address reuse across accounts is a documented fraud ring indicator"
         }
-      ]
+      ],
+      "tool_id": 17
     },
     {
       "name": "check_avs_result",
@@ -655,7 +672,8 @@
           "url": "https://www.pcisecuritystandards.org/",
           "relevance": "AVS is a required fraud prevention control for card-not-present transactions"
         }
-      ]
+      ],
+      "tool_id": 18
     },
     {
       "name": "check_address_validation",
@@ -692,7 +710,8 @@
           "url": "https://developers.google.com/maps/documentation/address-validation",
           "relevance": "Provides deliverability scoring and address component validation"
         }
-      ]
+      ],
+      "tool_id": 19
     },
     {
       "name": "check_reshipping_network",
@@ -729,7 +748,8 @@
           "url": "https://www.europeanpaymentscouncil.eu/",
           "relevance": "Reshipping fraud documented as a growing organized crime vector"
         }
-      ]
+      ],
+      "tool_id": 20
     },
     {
       "name": "get_refund_history",
@@ -763,7 +783,8 @@
           "url": "https://www.eba.europa.eu/",
           "relevance": "First-party fraud (refund/chargeback abuse) is the fastest-growing fraud category"
         }
-      ]
+      ],
+      "tool_id": 21
     },
     {
       "name": "get_chargeback_history",
@@ -802,7 +823,8 @@
           "url": "https://kount.com/",
           "relevance": "Commercial platforms dedicate entire modules to chargeback pattern analysis"
         }
-      ]
+      ],
+      "tool_id": 22
     },
     {
       "name": "check_account_age",
@@ -829,7 +851,8 @@
           "url": "https://www.unit21.ai/",
           "relevance": "Account age is a tier-1 risk signal in all commercial fraud platforms"
         }
-      ]
+      ],
+      "tool_id": 23
     },
     {
       "name": "check_session_behavior",
@@ -861,7 +884,8 @@
           "url": "https://www.featurespace.com/",
           "relevance": "Adaptive behavioral analytics is the core of their real-time fraud detection"
         }
-      ]
+      ],
+      "tool_id": 24
     },
     {
       "name": "check_merchant_risk",
@@ -893,7 +917,8 @@
           "url": "https://www.pcisecuritystandards.org/",
           "relevance": "Merchant risk assessment is a requirement for payment facilitators"
         }
-      ]
+      ],
+      "tool_id": 25
     },
     {
       "name": "check_merchant_fraud_rate",
@@ -925,7 +950,8 @@
           "url": "https://www.visa.com/",
           "relevance": "Merchants exceeding fraud rate thresholds face penalties or termination"
         }
-      ]
+      ],
+      "tool_id": 26
     },
     {
       "name": "check_sanctions_list",
@@ -962,7 +988,8 @@
           "url": "https://www.eba.europa.eu/",
           "relevance": "EU AML directives require sanctions screening as part of customer due diligence"
         }
-      ]
+      ],
+      "tool_id": 27
     },
     {
       "name": "check_adverse_media",
@@ -990,7 +1017,8 @@
           "url": "https://www.eba.europa.eu/",
           "relevance": "Adverse media screening is recommended as part of enhanced due diligence"
         }
-      ]
+      ],
+      "tool_id": 28
     },
     {
       "name": "check_pep_status",
@@ -1022,7 +1050,8 @@
           "url": "https://www.fatf-gafi.org/",
           "relevance": "PEP screening is a core FATF requirement for AML compliance"
         }
-      ]
+      ],
+      "tool_id": 29
     },
     {
       "name": "check_breach_exposure",
@@ -1055,7 +1084,8 @@
           "url": "https://www.eba.europa.eu/",
           "relevance": "Credential stuffing from breach data is a top account takeover vector"
         }
-      ]
+      ],
+      "tool_id": 30
     },
     {
       "name": "social_engineering_attack",
@@ -1083,7 +1113,8 @@
           "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
           "relevance": "AI-tools enable fraudsters to generate voice and video impersonating well-known persons"
         }
-      ]
+      ],
+      "tool_id": 31
     },
     {
       "name": "malware_infection",
@@ -1111,7 +1142,8 @@
           "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
           "relevance": "Measures against malware include proper maintenance of own devices"
         }
-      ]
+      ],
+      "tool_id": 32
     },
     {
       "name": "apt_attack",
@@ -1139,7 +1171,8 @@
           "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
           "relevance": "Measures against APTs should start with security defence-in-depth strategy"
         }
-      ]
+      ],
+      "tool_id": 33
     },
     {
       "name": "ddos_attack",
@@ -1167,7 +1200,8 @@
           "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
           "relevance": "ongoing geopolitical tensions\u2014particularly the Hamas-Israel and Russia-Ukraine wars\u2014have fuelled a surge in hacktivism"
         }
-      ]
+      ],
+      "tool_id": 34
     },
     {
       "name": "phishing_attempt",
@@ -1195,7 +1229,8 @@
           "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
           "relevance": "Awareness campaigns still play a very important countermeasures against social engineering"
         }
-      ]
+      ],
+      "tool_id": 35
     },
     {
       "name": "ceo_fraud",
@@ -1223,7 +1258,8 @@
           "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
           "relevance": "A shift in targets has been observed from consumers, retailers and SMEs to company executives, employees"
         }
-      ]
+      ],
+      "tool_id": 36
     },
     {
       "name": "app_fraud",
@@ -1251,7 +1287,8 @@
           "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
           "relevance": "Social engineering increasingly leads to authorised push payments (APP) fraud"
         }
-      ]
+      ],
+      "tool_id": 37
     },
     {
       "name": "ransomware_attack",
@@ -1279,7 +1316,8 @@
           "url": "file:///C:/Users/Administrator/Documents/Research/AI/AI_Payment/payment-lab/server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
           "relevance": "Measures against malware include proper maintenance of own devices"
         }
-      ]
+      ],
+      "tool_id": 38
     }
   ],
   "statistics": {

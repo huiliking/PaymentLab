@@ -24,6 +24,8 @@ from ai_agents.fraud_investigator import (
     list_flagged_transactions
 )
 from ai_agents.tool_registry import ToolRegistry
+from business.service import BusinessLayer, BusinessError
+from business.auth import current_principal
 
 fraud_bp = Blueprint('fraud', __name__)
 
@@ -50,6 +52,11 @@ if not os.path.exists(REGISTRY_PATH):
     REGISTRY_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ai_agents", "registry.json")
 
 tool_registry = ToolRegistry(REGISTRY_PATH)
+
+# Business layer — merchant -> tier -> allowed-tools resolution. Shares
+# tool_registry above (not a second load) so grant validation always sees
+# the same in-memory catalog the investigation loop dispatches against.
+business_layer = BusinessLayer(DB_PATH, tool_registry)
 
 # Serializes investigations: Ollama and sqlite writes aren't safe under
 # concurrent investigate() calls, so only one runs at a time per process.
@@ -136,6 +143,31 @@ def get_flagged():
     return jsonify({"flagged": results, "count": len(results)})
 
 
+def _resolve_merchant_for_transaction(txn_id):
+    """
+    Look up the merchant a transaction belongs to via merchant_ref (the
+    Sprint 5 FK column). Returns (merchant_id, registration_id), or
+    (None, None) if the transaction has no resolvable merchant — e.g. it
+    predates the migration in a way the backfill couldn't reach, or was
+    created without merchant_ref by a flow this sprint didn't touch
+    (checkout.py). Callers treat None as "no tier restriction" rather
+    than failing the investigation outright.
+    """
+    import sqlite3
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        """SELECT t.merchant_ref, m.registration_id
+           FROM transactions t LEFT JOIN merchants m ON t.merchant_ref = m.id
+           WHERE t.id = ?""",
+        (txn_id,)
+    ).fetchone()
+    conn.close()
+    if not row or row["merchant_ref"] is None:
+        return None, None
+    return row["merchant_ref"], row["registration_id"]
+
+
 @fraud_bp.route('/fraud/investigate/<txn_id>', methods=['POST'])
 def investigate_transaction(txn_id):
     """Run full FAA-style investigation on a transaction"""
@@ -149,16 +181,30 @@ def investigate_transaction(txn_id):
         _investigation_state["txn_id"] = txn_id
         metering_service = current_app.config.get('METERING_SERVICE')
 
+        # Resolve principal (business-layer requests never gate this route —
+        # investigation isn't a commercial-admin mutation — but the seam is
+        # here for whatever Sprint 6 needs to attach to this path).
+        current_principal()
+
+        merchant_id, customer_id = _resolve_merchant_for_transaction(txn_id)
+        allowed_tools = None
+        if merchant_id is not None:
+            try:
+                allowed_tools = business_layer.resolve_allowed_tools(merchant_id)
+            except BusinessError as e:
+                return jsonify({"error": str(e)}), 409
+
         investigator = FraudInvestigator(
             db_path=DB_PATH,
             ollama_url=OLLAMA_URL,
             model=OLLAMA_MODEL,
             registry_path=REGISTRY_PATH,
             metering_service=metering_service,
+            allowed_tools=allowed_tools,
         )
 
         try:
-            report = investigator.investigate(txn_id)
+            report = investigator.investigate(txn_id, customer_id=customer_id)
             return jsonify(report.to_dict())
         except Exception as e:
             import traceback

@@ -38,10 +38,12 @@ def create_app():
     from routes.products import products_bp
     from routes.config import config_bp
     from routes.fraud import fraud_bp
+    from routes.business import business_bp
     app.register_blueprint(checkout_bp, url_prefix="/api")
     app.register_blueprint(products_bp, url_prefix="/api")
     app.register_blueprint(config_bp, url_prefix="/api")
     app.register_blueprint(fraud_bp, url_prefix="/api")
+    app.register_blueprint(business_bp, url_prefix="/api")
 
     
     # ============================================================
