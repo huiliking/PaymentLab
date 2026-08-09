@@ -35,3 +35,9 @@ server/static/
 # Duplicate directories
 client/client/
 server/server/
+
+# Local-only Sprint 5 artifacts — kept on the dev machine deliberately,
+# not part of the repo record. The plan/report next to them ARE committed;
+# these two are personal notes and a pre-migration DB snapshot.
+server/business/SPRINT5_TESTING_SUMMARY.md
+server/payment_lab.db.pre-sprint5-backup

@@ -122,3 +122,122 @@ Render URL, by contrast, remain a weak test on their own — network
 latency and dyno scheduling can serialize what looks like a race without
 ever contending the lock, so a "pass" there shouldn't be read as strong
 evidence either way.
+
+---
+
+# Known Issues / Limitations — Sprint 5 (business layer, tool profiles)
+
+From the Sprint 5 test-review walkthrough — a mix of real gaps and
+accepted trade-offs. See `server/business/SPRINT5_TEST_REPORT.md` for the
+run that surfaced them and `SPRINT5_TEST_PLAN.md` for how to re-verify.
+
+## 6. Dispatch drops hallucinated/invalid tool calls instead of feeding them back
+
+`FraudInvestigator._dispatch()` correctly refuses any tool not in the
+merchant's grant — including tool names the LLM *hallucinates* (observed
+live: the model requested `check_email_history`, which doesn't exist; the
+real tool is `get_email_history`). The gate is a **safety** guarantee (no
+wrong tool runs), but it is not a **correctness** guarantee: if the model
+*meant* to perform a legitimate check and merely got the name wrong, the
+call is dropped and that investigation step silently never happens. A
+verdict can be reached with an intended check missing.
+
+**Fix direction:** on a rejected call, return the error *to the model*
+(e.g. "`check_email_history` is not a valid tool; available tools: …") so
+it can retry with the correct name, converting a silently-skipped step
+into a self-correcting loop. Prompt-hardening can lower the hallucination
+rate but must never be relied on as the control — the gate stays; the
+feedback-retry is the addition.
+
+**Priority:** medium. Affects investigation *quality*, not safety.
+
+## 7. Stress test proved no corruption at volume, not graceful behavior under contention
+
+`server/business/_stress_test_business_layer.py` ran 50 concurrent
+processes with 0 `database is locked` errors — but every operation was a
+millisecond-long single statement, so no writer ever held the lock long
+enough to force another into the 5-second `busy_timeout` retry path. The
+test proves the data model doesn't *logically* corrupt under concurrent
+access; it does **not** prove the lock-contention/retry mechanism actually
+recovers a writer that hits a genuinely held lock, because that condition
+was never manufactured.
+
+**Fix direction (only if concurrency ever matters at scale):** a
+deliberately adversarial concurrency test — either lower the SQLite
+`timeout` to near-zero to force clean fast-fail, or hold a write
+transaction open artificially so other writers must wait — plus enabling
+WAL mode (`PRAGMA journal_mode=WAL`) so readers and writers stop blocking
+each other (PaymentLab's many-readers/occasional-writer shape is exactly
+WAL's sweet spot).
+
+**Priority:** low at current (hobby) load; the gap is real but unlikely to
+manifest below dozens of concurrent admin writes.
+
+## 8. "default" tier conflates a safety fallback with a commercial free tier
+
+The seeded `default` tier grants *all 9 active tools*. This currently
+serves two distinct purposes that should be separated once real
+pricing/tiers are defined: (a) a **safety fallback** so a merchant with no
+valid tier still gets a working investigation, and (b) an eventual
+**commercial free/starter tier**, which should be *restrictive* (a few
+essential tools), not more privileged than a paid tier.
+
+**Fix direction:** when pricing tiers land (deferred roadmap item), split
+these — a restrictive starter/free tier for commercial packaging, and a
+separate explicit policy for the "unassigned/fallback" case (minimal
+tools, or fail loudly rather than silently granting everything).
+
+**Priority:** low now (mechanism-only sprint); revisit with pricing work.
+
+## 9. No commercial-admin UI — tier/grant management is API-only
+
+Sprint 5 delivered the endpoints and auth seam for managing tiers and
+grants, but no dashboard for the commercial-admin persona to drive them.
+All management is via curl/API today. This is by design for the sprint
+(deliverable 5 was explicitly "endpoints + auth seam," not a UI) but is
+worth naming so the absence reads as scoped-out, not overlooked — it's why
+the sprint is "invisible from the UI."
+
+**Fix direction:** a commercial-admin dashboard, most naturally alongside
+the Sprint 6 IAM work (the two personas — ops-admin, commercial-admin —
+want distinct UIs gated by distinct identities).
+
+**Priority:** medium; blocks non-technical use of the tiering feature.
+
+## 10. Registry-reload atomicity relies on one-snapshot-per-investigation
+
+The `tool_id`/`name` split is safe today partly because an investigation
+builds its allowed-list, its LLM-facing schemas, and its dispatch gate all
+from the *same* in-memory registry snapshot — so even a stale snapshot is
+internally consistent (schemas and gate agree on names). A latent
+fragility: if a future refactor reused a long-lived `FraudInvestigator`
+across a registry reload, the schemas shown to the LLM and the gate's
+allowed-list could be built from *different* snapshots, reintroducing
+exactly the "LLM uses one name, gate expects another" failure that's
+currently avoided.
+
+**Fix direction:** if investigator objects are ever cached/shared across
+requests or reloads, make registry reads within a single investigation an
+atomic snapshot explicitly, rather than depending on construction timing
+to keep them aligned.
+
+**Priority:** low (latent, not currently triggerable); note before any
+investigator-reuse refactor.
+
+## 11. `models/database.py`'s `DB_PATH` is a hardcoded module constant
+
+Unlike `routes/fraud.py`'s env-var-configurable path (`PAYMENT_LAB_DB`),
+`models/database.py` resolves `DB_PATH` relative to its own file location
+with no environment override. Consequence: `app.create_app()` can't be
+called in an isolated test without `init_db()` hitting the *real*
+`payment_lab.db` regardless of env vars. Found while building the Sprint 5
+pytest fixtures, which work around it by constructing a minimal Flask app
+that registers `fraud_bp`/`business_bp` directly and skips `create_app()`
+(and its metering-service side effect) entirely.
+
+**Fix direction:** make `DB_PATH` read from the environment the same way
+`routes/fraud.py` does, so `create_app()` itself becomes safely testable
+and the two path resolutions stop disagreeing.
+
+**Priority:** medium (test-safety — it constrains how the app can be
+tested, not how it runs).

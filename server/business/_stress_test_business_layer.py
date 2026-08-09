@@ -35,6 +35,23 @@ criteria). Exits 1 with [FAIL] lines on corruption or an unexpected
 exception. Always prints the total lock-contention count, and exits 0 even
 if that count is non-zero (a locked error that's cleanly surfaced as an
 exception, not silent corruption, is a finding to report — not a crash).
+
+BOUNDARY NOTE — this file imports ToolRegistry, and that is NOT a
+business -> function boundary violation:
+    Sprint 5's rule is that the *business layer* (service.py) must not
+    depend on the tooling layer directly — it receives a registry object
+    via constructor injection instead, so the dependency stays one-way and
+    substitutable. This script is test scaffolding that happens to live in
+    business/, not part of that layer: it has to construct a real
+    ToolRegistry precisely because it's playing the role the production
+    caller (routes/fraud.py) normally plays.
+    Consequence for anyone checking the boundary: do NOT
+    `grep -r tool_registry business/` — it matches this file, plus
+    service.py's own docstring explaining the rule. The real, automated
+    guard is
+    tests/test_sprint5_business_layer.py::test_service_module_does_not_import_tool_registry,
+    which parses service.py's actual import statements via `ast` rather
+    than text-searching. See SPRINT5_TEST_PLAN.md Phase 6.1.
 """
 import argparse
 import multiprocessing

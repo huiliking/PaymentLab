@@ -9,6 +9,18 @@ module is the only place that knows both tiers and tools — the registry
 never learns tiers exist, and this module never imports it directly. A
 ToolRegistry-like object (get_tool_by_id) is passed into the constructor
 instead, so the dependency stays one-way: business -> function.
+
+Scope of that rule: it applies to *this module* (the business layer
+itself), not to every file that happens to sit in business/. The
+concurrency script alongside it, _stress_test_business_layer.py,
+legitimately imports ToolRegistry — it's test scaffolding standing in for
+the production caller (routes/fraud.py), which is what constructs the
+registry and injects it here. So the boundary check is
+"does service.py import it", not "does anything under business/ mention
+it"; a directory-wide grep gives false positives (including on this very
+docstring). The automated version of the check lives in
+tests/test_sprint5_business_layer.py::test_service_module_does_not_import_tool_registry
+and inspects this file's real import statements via `ast`.
 """
 
 import sqlite3
