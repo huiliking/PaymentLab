@@ -21,6 +21,7 @@ the investigation loop.
 The agent runs on Claude API (claude-sonnet-4-5) with Ollama fallback.
 """
 from .identity_graph import IdentityGraphBuilder
+import difflib
 import sqlite3
 import json
 import re
@@ -56,6 +57,32 @@ except ModuleNotFoundError:
     from ai_agents.tool_registry import ToolRegistry
 
 
+# ── Retry-recovery tuning (Sprint 6) ────────────────────────────────────────
+
+# How many times a single hallucinated tool name gets corrective feedback
+# before the correction goes terminal. 1 = correct once, then give up on that
+# name. Name-sensitive, not params-sensitive: one stubborn fixation costs at
+# most two turns, not the whole investigation.
+HALLUCINATION_REPEAT_CAP = 1
+
+# Similarity above which a successfully-called tool counts as fulfilling the
+# intent behind a hallucinated name — i.e. the model self-corrected, so the
+# check is NOT unresolved and must not caveat the verdict.
+#
+# A hallucinated name is by definition absent from the registry, so it can
+# never itself appear in tools_called; "was this resolved?" is a
+# correspondence question, not a membership test, and name similarity is the
+# only signal the loop records. Measured against the live registry, genuine
+# near-miss fumbles (check_/get_ prefix swap on the same noun) score
+# 0.83–0.87 against their intended target while scoring ≤0.65 against every
+# other active tool. 0.75 sits in that corridor with margin on both sides.
+#
+# test_fuzzy_resolution_threshold pins this against the actual registry
+# contents, so a future tool name that narrows the gap fails loudly instead
+# of silently misclassifying.
+HALLUCINATION_MATCH_CUTOFF = 0.75
+
+
 # ── Data classes ────────────────────────────────────────────────────────────
 
 @dataclass
@@ -86,6 +113,12 @@ class InvestigationReport:
     steps: list = field(default_factory=list)
     created_at: str = ""
     tool_results: dict = field(default_factory=dict)   # keyed by tool name, stores raw results
+    # Intended checks the model asked for by a name that doesn't exist and
+    # never recovered from. Each entry:
+    #   {"tool_name": str, "attempts": int, "error_class": "unknown_tool"}
+    # Out-of-grant refusals never appear here — a tool the merchant's tier
+    # legitimately excludes is correct scope, not a gap.
+    unresolved_checks: list = field(default_factory=list)
 
     def to_dict(self):
         return {
@@ -98,6 +131,7 @@ class InvestigationReport:
             "steps": [asdict(s) if isinstance(s, InvestigationStep) else s for s in self.steps],
             "created_at": self.created_at,
             "tool_results": self.tool_results,
+            "unresolved_checks": self.unresolved_checks,
         }
 
 
@@ -582,8 +616,8 @@ class FraudInvestigator:
     """
     
     def __init__(self, db_path="payment_lab.db", ollama_url="http://localhost:11434",
-                 model="llama3.2", max_steps=6, registry_path=None, backend="ollama",
-                 metering_service=None, allowed_tools=None):
+                 model="llama3.2", max_steps=None, registry_path=None, backend="ollama",
+                 metering_service=None, allowed_tools=None, max_steps_ollama=None):
         """
         Args:
             backend: "auto" (Claude if key exists, else Ollama),
@@ -595,6 +629,13 @@ class FraudInvestigator:
                 layer before this object is constructed. None = no restriction
                 (all active tools), which preserves pre-Sprint-5 behavior for
                 CLI usage and any caller that hasn't resolved a merchant.
+            max_steps: Turn ceiling. None = per-backend defaults (Claude 6,
+                Ollama 8). An explicit value applies to BOTH backends — the
+                caller knows what they want. The asymmetry only applies to
+                defaults: Ollama has no parallel tool calls, so each
+                hallucination burns a whole iteration, and the smaller local
+                models fumble tool names more often than Claude.
+            max_steps_ollama: Overrides the Ollama ceiling specifically.
         """
         print(f"\n  {'='*55}")
         print(f"  FRAUD INVESTIGATOR - BOOT SEQUENCE")
@@ -605,10 +646,25 @@ class FraudInvestigator:
         self.rule_engine = RuleEngine(db_path)
         self.ollama_url = ollama_url
         self.model = model
-        self.max_steps = max_steps
+        # Per-backend turn ceilings. An explicit max_steps wins for both
+        # backends; the 6/8 asymmetry only applies when the caller passed
+        # nothing (hence the None sentinel rather than a literal default —
+        # a plain default of 6 can't distinguish "caller passed 6" from
+        # "caller passed nothing").
+        self.max_steps = 6 if max_steps is None else max_steps
+        if max_steps_ollama is not None:
+            self.max_steps_ollama = max_steps_ollama
+        elif max_steps is not None:
+            self.max_steps_ollama = max_steps
+        else:
+            self.max_steps_ollama = 8
         self.db_path = db_path
         self.meter = metering_service
         self.allowed_tools = allowed_tools
+        # {tool_name: attempt_count} for names the model hallucinated.
+        # Investigation-scoped state that guides loop behavior; the *outcome*
+        # (which names stayed unresolved) goes on the report instead.
+        self._hallucination_attempts = {}
         print(f"  [BOOT 1/3] Database: {db_path}")
 
         # Phase 2: Tool registry
@@ -659,6 +715,30 @@ class FraudInvestigator:
 
         print(f"  {'='*55}\n")
 
+    def _available_tool_names(self):
+        """
+        The tool names the model is actually allowed to use right now — the
+        merchant's grant when one is resolved, otherwise every active tool.
+        This is what a correction message offers as alternatives, so it must
+        never leak names outside the grant (one-way dependency: the business
+        layer produces policy, this layer only consumes it).
+        """
+        if self.allowed_tools is not None:
+            return list(self.allowed_tools)
+        return [t["name"] for t in self.registry.get_active_tools()]
+
+    def _correction_message(self, tool_name, terminal):
+        """Corrective feedback for a hallucinated tool name."""
+        if terminal:
+            return (
+                f"'{tool_name}' is not a valid tool. This tool was already "
+                f"corrected and remains unavailable. Proceeding without it."
+            )
+        return (
+            f"'{tool_name}' is not a valid tool. "
+            f"Available tools: {', '.join(self._available_tool_names())}"
+        )
+
     def _dispatch(self, tool_name, params):
         """
         Execute a tool call, enforcing the merchant's tier grant server-side
@@ -666,10 +746,123 @@ class FraudInvestigator:
         outside allowed_tools, but this is the actual gate: it's checked
         against every tool call that reaches dispatch, not just what the
         LLM was shown, so a hallucinated or out-of-grant call can't execute.
+
+        The gate refuses two different things and the caller needs to tell
+        them apart, so every refusal carries an `error_class`:
+
+          - "unknown_tool" — the name isn't in the registry at all. A model
+            fumble, not a policy refusal; the loops feed the correction back
+            so the model can retry with the right name.
+          - "not_granted"  — the tool exists but is outside this merchant's
+            tier. The gate working as designed. Terminal, no retry.
+
+        Both keep the `error` key, so existing `if "error" in result` checks
+        stay correct; `error_class` is purely additive.
+
+        ORDER IS LOAD-BEARING. Classification is a read-only registry lookup
+        that must happen before any execution path. Never classify by
+        attempting registry.execute() first — that would run a valid-but-
+        ungranted tool before the gate refuses it.
         """
+        # 1. Hallucination. Checked OUTSIDE the allowed_tools guard: a
+        #    nonexistent name must not reach registry.execute() whether or
+        #    not a merchant was resolved.
+        if self.registry.get_tool(tool_name) is None:
+            attempts = self._hallucination_attempts.get(tool_name, 0)
+            return {
+                "error": self._correction_message(
+                    tool_name, terminal=attempts >= HALLUCINATION_REPEAT_CAP
+                ),
+                "error_class": "unknown_tool",
+            }
+
+        # 2. Out-of-grant. Unreachable when allowed_tools is None (CLI, no
+        #    merchant resolved) — that case has no grant to be outside of,
+        #    so it falls through to execute, exactly as before Sprint 6.
         if self.allowed_tools is not None and tool_name not in self.allowed_tools:
-            return {"error": f"Tool '{tool_name}' is not granted for this merchant's tier"}
+            return {
+                "error": f"Tool '{tool_name}' is not granted for this merchant's tier",
+                "error_class": "not_granted",
+            }
+
+        # 3. Real name, in grant (or unrestricted). Inactive tools land here
+        #    too — the name is real, so registry.execute() handles the
+        #    status check with its own error rather than us calling it a
+        #    hallucination.
         return self.registry.execute(tool_name, params, self.tools)
+
+    def _note_hallucination(self, tool_name):
+        """
+        Record an attempt at a hallucinated name and report whether the
+        correction has gone terminal.
+
+        The cap is name-sensitive, not params-sensitive: check_email_history
+        with {"email": ...} and with {"txn_id": ...} are the same bad name,
+        one correction attempt total.
+
+        Returns (attempts, terminal).
+        """
+        attempts = self._hallucination_attempts.get(tool_name, 0) + 1
+        self._hallucination_attempts[tool_name] = attempts
+        return attempts, attempts > HALLUCINATION_REPEAT_CAP
+
+    def _apply_unresolved_caveats(self, context, report):
+        """
+        Turn leftover hallucinated names into report caveats, after the
+        verdict has been parsed and the loop's own fallbacks have run.
+
+        A name counts as RESOLVED — no entry, no cap — when the model
+        self-corrected: some tool it actually called successfully is a close
+        enough match to the name it fumbled. See HALLUCINATION_MATCH_CUTOFF
+        for why this is a similarity test rather than a membership test.
+
+        Out-of-grant refusals never reach here; they're correct scope, not a
+        gap, and must not caveat the verdict.
+        """
+        if not self._hallucination_attempts:
+            return
+
+        # The Ollama loop records deduped calls as "<name> (skipped-dup)".
+        # Strip the suffix rather than dropping the entry — a name that was
+        # self-corrected and then deduped on a later iteration still proves
+        # the check happened.
+        called = [
+            name.replace(" (skipped-dup)", "")
+            for name in context.get("tools_called", [])
+        ]
+
+        for tool_name, attempts in self._hallucination_attempts.items():
+            if attempts <= 0:
+                continue
+            resolved = any(
+                difflib.SequenceMatcher(None, tool_name, name).ratio()
+                >= HALLUCINATION_MATCH_CUTOFF
+                for name in called
+            )
+            if resolved:
+                print(f"  [CORRECTION] '{tool_name}' resolved by a later call — no caveat")
+                continue
+            report.unresolved_checks.append({
+                "tool_name": tool_name,
+                "attempts": attempts,
+                "error_class": "unknown_tool",
+            })
+
+        if not report.unresolved_checks:
+            return
+
+        # Cap, don't set — a model that already returned 0.5 stays at 0.5.
+        # The cap only prevents a high-confidence verdict hiding a gap.
+        cap = 0.85 if len(report.unresolved_checks) == 1 else 0.7
+        if report.confidence > cap:
+            print(f"  [CORRECTION] Confidence capped {report.confidence} → {cap} "
+                  f"({len(report.unresolved_checks)} unresolved check(s))")
+            report.confidence = cap
+
+        report.summary += (
+            f" [{len(report.unresolved_checks)} intended check(s) could not be "
+            f"completed due to tool name errors.]"
+        )
 
     def investigate(self, txn_id, customer_id=None):
         """
@@ -690,6 +883,10 @@ class FraudInvestigator:
         # Metering: one session per investigation
         self._session_id = str(uuid.uuid4())
         self._customer_id = customer_id or "unknown_merchant"
+
+        # Hallucination tracking is per-investigation, not per-instance —
+        # the CLI's --investigate-all reuses one investigator across a batch.
+        self._hallucination_attempts = {}
 
         print(f"\n{'='*60}")
         print(f"FRAUD INVESTIGATION: {txn_id}")
@@ -724,7 +921,11 @@ class FraudInvestigator:
             "transaction": txn,
             "pre_screen_triggers": triggers,
             "evidence_gathered": [],
-            "tools_called": []
+            "tools_called": [],
+            # Corrective feedback for hallucinated names, surfaced back into
+            # the next Ollama prompt. Claude gets its corrections through
+            # tool_result blocks instead, so this stays empty there.
+            "corrections": []
         }
 
         if not txn:
@@ -761,7 +962,7 @@ class FraudInvestigator:
         step_count = 0
         consecutive_skips = 0
 
-        for iteration in range(self.max_steps):
+        for iteration in range(self.max_steps_ollama):
             step_count += 1
             print(f"\n  --- Iteration {step_count} ---")
 
@@ -811,6 +1012,30 @@ class FraudInvestigator:
             print(f"  [GATHER] Calling {tool_name}({tool_params})")
             print(f"  [REGISTRY] Dispatching → registry.execute('{tool_name}', ..., tools_instance)")
             tool_result = self._dispatch(tool_name, tool_params)
+
+            # ── Hallucinated name: correct it, don't record it as evidence ──
+            # The model fumbled a name; feed the right ones back and let it
+            # retry. This is NOT a gather — it produces no evidence, no
+            # tool_results entry, and no GATHER step. Deliberately does not
+            # touch consecutive_skips either: that counter is for repeated
+            # *valid* calls, and conflating them could end the investigation
+            # early on what is really a recoverable typo.
+            if tool_result.get("error_class") == "unknown_tool":
+                attempts, terminal = self._note_hallucination(tool_name)
+                message = self._correction_message(tool_name, terminal=terminal)
+                print(f"  [CORRECTION] {message}")
+                context["corrections"].append({
+                    "tool_name": tool_name,
+                    "message": message,
+                    "terminal": terminal,
+                })
+                report.steps.append(InvestigationStep(
+                    step_number=step_count, phase="CORRECTION",
+                    action=f"Rejected hallucinated tool name '{tool_name}' (attempt {attempts})",
+                    result=message,
+                    tool_used=None
+                ))
+                continue
 
             if "error" in tool_result:
                 print(f"  [REGISTRY] Error: {tool_result['error']}")
@@ -901,6 +1126,11 @@ class FraudInvestigator:
         report.verdict = verdict.get("verdict", "SUSPICIOUS")
         report.confidence = verdict.get("confidence", 0.5)
         report.summary = verdict.get("summary", "Investigation completed.")
+
+        # After the verdict AND after the mandatory-graph fallback above, so
+        # a tool called by the fallback still counts toward resolution.
+        self._apply_unresolved_caveats(context, report)
+
         report.steps.append(InvestigationStep(
             step_number=step_count + 1, phase="VERDICT",
             action="Final analysis",
@@ -1081,6 +1311,30 @@ class FraudInvestigator:
 
                 tool_result = self._dispatch(tool_name, params)
 
+                # ── Hallucinated name: correct it, don't record it ──────────
+                # Not a gather: no evidence, no tool_results entry, no
+                # GATHER step. The API still requires a tool_result for every
+                # tool_use id, so the correction rides back in that block.
+                # In a parallel batch this is per-block, so a valid call in
+                # the same turn executes normally and is unaffected.
+                if tool_result.get("error_class") == "unknown_tool":
+                    attempts, terminal = self._note_hallucination(tool_name)
+                    message = self._correction_message(tool_name, terminal=terminal)
+                    print(f"  [CORRECTION] {message}")
+                    report.steps.append(InvestigationStep(
+                        step_number=step_count, phase="CORRECTION",
+                        action=f"Rejected hallucinated tool name '{tool_name}' (attempt {attempts})",
+                        result=message,
+                        tool_used=None
+                    ))
+                    tool_results_content.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": message,
+                        "is_error": True,
+                    })
+                    continue
+
                 if "error" in tool_result:
                     print(f"  [REGISTRY] Error: {tool_result['error']}")
                 else:
@@ -1149,6 +1403,8 @@ class FraudInvestigator:
         report.confidence = verdict.get("confidence", 0.5)
         report.summary = verdict.get("summary", "")
 
+        self._apply_unresolved_caveats(context, report)
+
         # Store token usage in report metadata
         report.steps.append(InvestigationStep(
             step_number=step_count + 1, phase="VERDICT",
@@ -1214,6 +1470,41 @@ class FraudInvestigator:
         ]
         tools_not_called_str = ", ".join(tools_not_called) if tools_not_called else "all tools used"
 
+        # Surface hallucinated names back to the model so it can retry with
+        # the right one. Only rendered when something was actually fumbled.
+        #
+        # KNOWN_ISSUES #12, corrected: an earlier fix here filtered out
+        # terminal entries but left context["corrections"] itself as a
+        # cumulative, never-pruned list. That meant the FIRST correction for
+        # a name — attempt 1, always non-terminal by construction (the cap
+        # is 1) — was never filtered and stayed in the list for the rest of
+        # the investigation, so "You requested 'check_email_history' — this
+        # tool does not exist" kept re-entering the prompt on every
+        # subsequent turn regardless of the terminal filter. A live
+        # verification run confirmed the literal corrective string present
+        # in the prompt at iterations 2 through 8 of an 8-turn investigation
+        # — worse than before the "fix" (5 attempts, not 2).
+        #
+        # The real defect is that corrections were never consumed. Every
+        # entry here is shown at most once: build the block from whatever
+        # arrived since the last call, filtering out terminal entries (the
+        # model already had its one non-terminal correction; re-displaying
+        # "already corrected and unavailable" adds nothing and is still the
+        # bad string), then clear the channel so nothing lingers into future
+        # turns. Accounting (self._hallucination_attempts) and the
+        # investigation trace (report.steps, phase="CORRECTION") are
+        # unaffected — this list has no other reader.
+        corrections = [c for c in context.get("corrections", []) if not c.get("terminal")]
+        context["corrections"] = []
+        if corrections:
+            corrections_text = "\nTOOL NAME CORRECTIONS:\n" + "\n".join(
+                f"  - You requested '{c['tool_name']}' — this tool does not exist.\n"
+                f"    {c['message']}"
+                for c in corrections
+            ) + "\n"
+        else:
+            corrections_text = ""
+
         if iteration == 0:
             strategy_hint = (
                 "STRATEGY: Start by gathering transaction details or checking the email/card history. "
@@ -1247,7 +1538,7 @@ PRE-SCREEN ALERTS:
 TOOLS ALREADY CALLED: {tools_already_called}
 
 EVIDENCE GATHERED SO FAR:{evidence_summary if evidence_summary else " (none yet)"}
-
+{corrections_text}
 AVAILABLE TOOLS:
 {tool_desc}
 - CONCLUDE: End investigation (use when you have enough evidence from at least 4 tools)
@@ -1258,7 +1549,7 @@ RULES:
 1. Each iteration, pick ONE tool you have NOT called yet.
 2. Never repeat a tool. Never call the same tool with different params.
 3. Use at least 4 different tools before CONCLUDE.
-4. ITERATION: {iteration + 1} of {self.max_steps}.
+4. ITERATION: {iteration + 1} of {self.max_steps_ollama}.
 
 Respond in EXACTLY this format (3 lines, nothing else):
 REASONING: <one sentence about why this tool>
@@ -1707,6 +1998,9 @@ if __name__ == "__main__":
     parser.add_argument("--registry", default=None, help="Path to registry.json (default: auto-detect)")
     parser.add_argument("--backend", default="auto", choices=["auto", "ollama", "claude"],
                         help="LLM backend: 'ollama' (force local), 'claude' (force API), 'auto' (Claude if key set)")
+    parser.add_argument("--max-steps", type=int, default=None,
+                        help="Turn ceiling, applied to both backends. "
+                             "Default: Claude 6, Ollama 8.")
     parser.add_argument("--investigate-all", action="store_true", help="Investigate all flagged transactions")
     args = parser.parse_args()
     
@@ -1736,6 +2030,7 @@ if __name__ == "__main__":
             registry_path=args.registry,
             backend=args.backend,
             metering_service=meter,
+            max_steps=args.max_steps,
         )
         report = investigator.investigate(args.txn)
     
@@ -1756,6 +2051,7 @@ if __name__ == "__main__":
             registry_path=args.registry,
             backend=args.backend,
             metering_service=meter,
+            max_steps=args.max_steps,
         )
         
         print(f"\nInvestigating {len(flagged)} flagged transactions...\n")

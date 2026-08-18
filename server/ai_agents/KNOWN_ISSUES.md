@@ -131,7 +131,7 @@ From the Sprint 5 test-review walkthrough — a mix of real gaps and
 accepted trade-offs. See `server/business/SPRINT5_TEST_REPORT.md` for the
 run that surfaced them and `SPRINT5_TEST_PLAN.md` for how to re-verify.
 
-## 6. Dispatch drops hallucinated/invalid tool calls instead of feeding them back
+## 6. [RESOLVED 2026-08-10] Dispatch drops hallucinated/invalid tool calls instead of feeding them back
 
 `FraudInvestigator._dispatch()` correctly refuses any tool not in the
 merchant's grant — including tool names the LLM *hallucinates* (observed
@@ -150,6 +150,52 @@ rate but must never be relied on as the control — the gate stays; the
 feedback-retry is the addition.
 
 **Priority:** medium. Affects investigation *quality*, not safety.
+
+**Resolved in Sprint 6.** `_dispatch()` now classifies rather than merely
+refusing. It checks the registry *before* the grant, so the two rejection
+classes are distinguishable and each carries an `error_class`:
+
+- `"unknown_tool"` — name absent from the registry. A model fumble. Both
+  loops feed a corrective message listing the granted tool names back to
+  the model, so it can retry with the right one.
+- `"not_granted"` — real tool, outside the merchant's tier. Terminal and
+  unchanged, message byte-identical to Sprint 5. No retry: the model
+  already has the granted schemas, so re-prompting costs turns for no
+  expected benefit, and a legitimately excluded tool is correct scope, not
+  a gap.
+
+The gate did not weaken. Classification is a read-only `registry.get_tool()`
+lookup on the same snapshot the schemas came from (so #10 stays satisfied),
+and it happens strictly before any execution path — the Sprint 5
+`assert_not_called` test passes unchanged.
+
+Bounds and accounting:
+
+- Per-name repeat cap of 1, name-sensitive not params-sensitive. A second
+  attempt at the same bad name gets a terminal message, so one stubborn
+  fixation costs at most two turns.
+- Corrections consume the loop's own `max_steps`; there is no separate
+  budget that extends an investigation past its ceiling.
+- Hallucinations never enter `evidence_gathered`, `tools_called`, or
+  `tool_results`. They produce a `phase="CORRECTION"` step, not `"GATHER"`.
+- Names still unresolved at investigation end land in
+  `InvestigationReport.unresolved_checks` and cap confidence at 0.85 (one)
+  or 0.7 (two or more) — capped, never raised. Out-of-grant refusals
+  populate nothing and cap nothing.
+- An investigation is never aborted for this. Give up = log + caveat.
+
+**Note on "resolved".** A hallucinated name can never itself appear in
+`tools_called` — it isn't a real tool — so "did the model recover?" is a
+correspondence question, not a membership test, and a literal membership
+check would collapse to "always caveat." Resolution therefore uses
+`difflib.SequenceMatcher` against the names actually called, at
+`HALLUCINATION_MATCH_CUTOFF = 0.75`. Measured on the live registry,
+prefix-swap fumbles score 0.769–0.875 against their intended target and
+≤0.649 against every other active tool. The margin is real but not
+enormous — `get_velocity` → `check_velocity` clears by only 0.019 — so
+`test_fuzzy_resolution_threshold` pins the invariant against the actual
+registry contents and fails loudly if a future tool name narrows the gap.
+See `SPRINT6_TEST_REPORT.md`.
 
 ## 7. Stress test proved no corruption at volume, not graceful behavior under contention
 
@@ -241,3 +287,97 @@ and the two path resolutions stop disagreeing.
 
 **Priority:** medium (test-safety — it constrains how the app can be
 tested, not how it runs).
+
+---
+
+# Known Issues — Sprint 6 (retry-recovery)
+
+## 12. [RESOLVED] The corrections channel was cumulative, not consumed
+
+Found during the Sprint 6 Phase 3 live run (`SPRINT6_TEST_PLAN.md`), not
+predicted by the handover. Root cause misdiagnosed on the first pass; the
+correct diagnosis and fix are below.
+
+**Symptom.** The `TOOL NAME CORRECTIONS:` block `_llm_plan()` adds to the
+prompt names the hallucinated tool in order to correct it — *"You requested
+'check_email_history' — this tool does not exist."* On `llama3.2`, two
+injected fumbles at iterations 1–2 were followed by the model
+*spontaneously* producing `check_email_history` again at iterations 6 and
+7 — 4 of 8 turns spent on a name that cannot execute.
+
+**First attempt (insufficient).** The initial fix filtered
+`context["corrections"]` to exclude entries where `terminal is True` before
+rendering the block, on the theory that repeating the terminal message
+("already corrected and remains unavailable") was the contamination
+source. A live re-run of the identical scenario showed this made things
+*worse* — 5 attempts, not 2 — with the corrective (non-terminal) message
+present in **7 of 8** prompts, unchanged from before the filter.
+
+**Actual root cause.** `context["corrections"]` was never pruned; entries
+only ever accumulated. Because `HALLUCINATION_REPEAT_CAP = 1`, attempt 1
+for any name is *always* non-terminal by construction — so the terminal
+filter never touched it. That first entry stayed in the list for the rest
+of the investigation and was re-rendered into `_llm_plan()`'s prompt on
+every subsequent turn, terminal-filter notwithstanding. The filter removed
+attempts 2+; it never had a chance to remove the one entry that actually
+mattered.
+
+**Fix applied.** Corrections are now consumed on read: `_llm_plan()` clears
+`context["corrections"] = []` immediately after building the block, so any
+given entry can appear in at most one prompt — the turn right after it was
+appended — never again. The terminal filter is kept as well (a terminal
+message still isn't worth a second display), but the clear is what closes
+the gap; the filter alone did not.
+
+**Verified live**, same transaction, same model, same injected fumbles,
+prompts logged and compared line-by-line pre/post fix:
+
+| | bad name present in prompt | `attempts` recorded |
+|---|---|---|
+| Before any fix | 7 of 8 iterations | 4 |
+| Terminal-filter only (insufficient) | 7 of 8 iterations | 5 |
+| Consumed-on-read (applied) | **1 of 8** iterations | **2** |
+
+With the fix, the bad name appears exactly once — at iteration 2, the
+single deliberate display — and the model did not re-hallucinate it on its
+own for the rest of the run. `attempts: 2` matches the two *injected*
+fumbles precisely, with zero spontaneous repeats. That is strong evidence
+the echo was driven by the persistent prompt content, not (solely) an
+intrinsic model bias toward that name — though this is one run, not a
+statistical guarantee across seeds.
+
+What stayed correct throughout, including during the insufficient first
+attempt:
+
+- The gate refused every attempt; nothing ungranted ever executed.
+- No evidence pollution: `GATHER` steps for the bad name = `[]` in every
+  variant.
+- Accounting stayed correct: `_hallucination_attempts` is keyed by name, so
+  4–5 attempts still yielded exactly **one** `unresolved_checks` entry and
+  a 0.85 cap, not 0.7.
+- The investigation always completed and produced a verdict, bounded by
+  `max_steps`.
+
+So even the insufficient first attempt was a quality/efficiency defect, not
+a safety or correctness one — the same category as the #6 this descends
+from. It just wasn't the fix.
+
+**Regression coverage:**
+`test_correction_shown_at_most_once_across_calls`
+(`test_sprint6_retry_recovery.py`) calls `_llm_plan()` three times over one
+unconsumed correction and asserts the bad name appears in the first prompt
+only — the multi-call behavior the original single-call tests
+(`test_terminal_corrections_are_not_shown_in_prompt`, etc.) couldn't catch,
+since a single `_llm_plan()` call can't observe whether state persists
+across calls.
+
+**Rejected alternative** (unaffected by the correction above): counting
+terminal repeats toward `consecutive_skips` so the loop bails early.
+`SPRINT6_HANDOVER.md` §4 explicitly forbids it ("conflating them could
+terminate the investigation prematurely").
+
+**Status:** resolved in `fraud_investigator.py` (`_llm_plan()`), verified
+against both the mocked suite and a live Ollama run. Not yet re-confirmed
+against a second model (`llama3.2:1b` or larger) or a second transaction —
+worth doing before treating the live measurement above as representative
+rather than indicative.
