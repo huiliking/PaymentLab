@@ -1338,5 +1338,14 @@
       "merchant_product": 2,
       "external_intel": 4
     }
-  }
+  },
+  "scan_history": [
+    {
+      "report_name": "EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0",
+      "report_path": "server/ai_agents/EPC162-24 v2.0 2025 Payments Threats and Fraud Trends Report_0.pdf",
+      "profile": "narrative",
+      "scanned_at": "2026-07-18T16:47:25Z",
+      "proposals_generated": 8
+    }
+  ]
 }

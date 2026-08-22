@@ -49,7 +49,7 @@ whatever auth mechanism the app eventually adopts) to these three routes,
 and wire the frontend `isAdmin` flag to the same source of truth so the UI
 and the API agree about who's allowed to do what.
 
-## 3. Category-overview status filter has no visible effect
+## 3. [RESOLVED Sprint 7] Category-overview status filter has no visible effect
 
 In `client/src/pages/ToolDashboard.jsx`, the status filter dropdown
 (All/Active/Candidate/Proposed/Rejected) only applies when a specific
@@ -59,10 +59,25 @@ unfiltered `registry.statistics` object, so changing the status filter while
 on that view has no visible effect — it looks broken until the user clicks
 into a category.
 
-**Fix direction:** either compute a filtered-statistics variant for the
-overview grid cards (count only tools matching `selectedStatus` per
-category), or disable/hide the status filter while on the "All Categories"
-view so it doesn't imply functionality that isn't there.
+**Precise reachable scenario** (found during the Sprint 7 fix, sharper than
+the original description above): the status `<select>` is already
+`disabled={!selectedCategory}`, so a user can't change the filter while
+*looking* at the overview at all. The actual bug: drill into a category,
+change `selectedStatus`, navigate back to "All Categories" — the value is
+never reset, the (now-disabled) dropdown still displays it, but the overview
+grid silently ignores it and shows unfiltered counts.
+
+**Fix applied:** `CategoryOverviewGrid` now takes `tools`/`selectedStatus`/
+`isAdmin` props (the last was previously accepted but unused — a
+pre-existing dead prop now genuinely consumed) and computes per-category
+counts filtered by `selectedStatus` client-side, from `registry.tools`
+(already fully present in client state — no backend query needed). When
+`selectedStatus === 'all'`, the original active/candidate/total three-stat
+row renders unchanged; otherwise each card shows a single
+`"{N} {StatusLabel}"` line. Verified in-browser: setting the filter to
+"Candidate" inside a category, then returning to "All Categories," produces
+per-card counts that exactly match `CategorySidebar`'s own (always-correct)
+per-category candidate tallies.
 
 ---
 
@@ -381,3 +396,83 @@ against both the mocked suite and a live Ollama run. Not yet re-confirmed
 against a second model (`llama3.2:1b` or larger) or a second transaction —
 worth doing before treating the live measurement above as representative
 rather than indicative.
+
+---
+
+# Known Issues — Sprint 7 (scanner pipeline expansion)
+
+## 13. `narrative` profile's section-3.1 extraction reproducibly breaks Ollama's JSON formatting
+
+Found during Sprint 7 sign-off, live-scan verification
+(`SPRINT7_TEST_PLAN.md` Part B) — not caught by the mocked test suite, since
+every mocked test supplies hand-written, well-formed JSON as the "Ollama
+response."
+
+**Symptom.** Two live scans of the EPC report with `--profile narrative`,
+same model (`llama3.2:latest`), both produced the same malformed shape —
+each candidate as its own top-level `[...]` array containing bare
+`"key": "value"` pairs with no enclosing `{}`:
+
+```
+["name": "phishing_email", "category": "external_intel", "description": "...", ...]
+["name": "malware_infection", "category": "external_intel", "description": "...", ...]
+```
+
+This isn't truncation — it's structurally invalid JSON from the first
+character (an array literal can't contain bare key:value pairs). `main()`
+caught it cleanly both times (`[SCAN] FAILED: ... Cannot find a repair
+point in truncated JSON`, exit 1, no traceback), and no corrupt or partial
+`scan_history` entry was written on either failed run (`add_scan_history()`
+is only reached after successful parsing) — the Sprint 7 code introduced by
+this sprint behaved exactly as designed on this failure path.
+
+**Root cause is the new prompt content, not the parsing/extraction code.**
+`strip_json_repair()` is byte-for-byte unchanged by Sprint 7 — its repair
+heuristic (patch a truncated tail, close unbalanced brackets) was never
+designed to recover from a missing object wrapper, which is a different
+failure mode than what it exists to handle. Confirmed by a direct
+side-by-side test against the *same live model, same session*:
+
+- **Old (pre-Sprint-7) hardcoded window** (`full_text[8000:8000+6000]`) →
+  clean output, `{` `}`-wrapped objects, parsed successfully into 8
+  candidates — consistent with how the original 8 EPC-sourced tools in the
+  registry were produced back in Sprint 3.
+- **New `narrative` profile's section-3.1 window** (same model, same day) →
+  malformed on 2/2 attempts.
+
+So the regex-based section extraction is doing its job correctly — it
+finds the real content, not the TOC, and the section it targets (3.1
+"Cyber threats, attack techniques and fraud enablers") is exactly the
+right material — but that content's own heavy nested-numbering structure
+(3.1, 3.1.1, 3.1.1.1, ...) plausibly confuses a small local model into
+echoing bracket/list conventions from the source text into its own output
+format. Unconfirmed hypothesis; not verified further this sprint.
+
+**Not a Sprint 7 regression in the code-correctness sense** — every code
+path Sprint 7 actually added (duplicate detection, `run_scan()`
+orchestration, `scan_history` read/write, the dashboard extension) is
+independently proven correct by the mocked suite and browser verification,
+none of which depend on what the LLM says. This is a content/prompt-quality
+finding surfaced *by* Sprint 7's live-verification requirement, not a defect
+introduced *by* Sprint 7's changes to `tool_registry.py` or the frontend.
+
+**Fix direction (not applied — a prompt/parsing decision, not a Sprint 7
+architecture change):**
+- Harden the prompt with an explicit one-shot example showing the required
+  `{"name": ..., ...}` object shape, since the current prompt states the
+  contract in prose only ("output an object with these exact fields") and
+  llama3.2 isn't reliably inferring the brace requirement for this
+  particular content.
+- Extend `strip_json_repair()` to detect and repair the "flat key:value
+  pairs directly inside `[]`" pattern specifically, as a second repair
+  strategy alongside the existing truncation repair.
+- Or: reduce `max_chars` for the `narrative` profile, since the numbered
+  substructure gets denser (more sub-sub-sections) later in the section —
+  a shorter, shallower excerpt may reduce the model's exposure to nested
+  numbering.
+
+**Priority:** medium. Blocks the `narrative` profile from producing usable
+proposals against this specific report with this specific model right now,
+but doesn't block anything Sprint 7 itself shipped — the scanner's
+provenance-tracking and profile infrastructure work correctly regardless of
+whether a given scan's LLM output happens to parse.

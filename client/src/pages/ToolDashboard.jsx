@@ -261,6 +261,8 @@ const ToolDashboard = () => {
         </select>
       </div>
 
+      <ScanHistoryPanel scanHistory={registry.scan_history} />
+
       {/* Body: sidebar + content */}
       <div style={{ display: 'flex', gap: '2rem', alignItems: 'flex-start' }}>
         <CategorySidebar
@@ -276,6 +278,8 @@ const ToolDashboard = () => {
             <CategoryOverviewGrid
               categories={registry.categories}
               statistics={registry.statistics}
+              tools={registry.tools}
+              selectedStatus={selectedStatus}
               onSelect={setSelectedCategory}
               isAdmin={isAdmin}
             />
@@ -375,7 +379,79 @@ function CategorySidebar({ categories, statistics, selectedCategory, onSelect, i
   );
 }
 
-function CategoryOverviewGrid({ categories, statistics, onSelect }) {
+function ScanHistoryPanel({ scanHistory }) {
+  if (!scanHistory || scanHistory.length === 0) {
+    return (
+      <div className="card" style={{ marginBottom: '1.5rem', padding: '1.5rem', textAlign: 'center', color: 'var(--ink-muted)' }}>
+        No scans recorded yet
+      </div>
+    );
+  }
+  return (
+    <div className="card" style={{ marginBottom: '1.5rem' }}>
+      <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid var(--border)' }}>
+        <h2 style={{ fontSize: '1rem', fontWeight: 600 }}>📄 Scan History</h2>
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', minWidth: 640, borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: 'var(--surface-elevated)' }}>
+              <th style={thStyle}>Report</th>
+              <th style={{ ...thStyle, width: 160 }}>Scanned</th>
+              <th style={{ ...thStyle, width: 110 }}>Profile</th>
+              <th style={{ ...thStyle, width: 260 }}>Proposals</th>
+            </tr>
+          </thead>
+          <tbody>
+            {scanHistory.map((s, idx) => (
+              <tr key={`${s.report_name}-${idx}`} style={{ borderTop: '1px solid var(--border)' }}>
+                <td style={tdStyle}>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}>{s.report_name}</div>
+                </td>
+                <td style={{ ...tdStyle, fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{s.scanned_at}</td>
+                <td style={tdStyle}>
+                  <span style={{
+                    display: 'inline-flex', padding: '0.2rem 0.6rem', borderRadius: 100,
+                    fontSize: '0.78rem', fontWeight: 500,
+                    background: 'var(--accent-soft)', color: 'var(--accent)',
+                  }}>
+                    {s.profile}
+                  </span>
+                </td>
+                <td style={{ ...tdStyle, fontSize: '0.82rem' }}>
+                  <span>{s.proposals_generated} generated</span>
+                  {' · '}
+                  <span style={{ color: 'var(--success)' }}>{s.proposals_approved} approved</span>
+                  {' · '}
+                  <span style={{ color: 'var(--danger)' }}>{s.proposals_rejected} rejected</span>
+                  {' · '}
+                  <span style={{ color: 'var(--ink-muted)' }}>{s.proposals_pending} pending</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function CategoryOverviewGrid({ categories, statistics, tools, selectedStatus, isAdmin, onSelect }) {
+  // Per-category counts filtered by selectedStatus, computed inline rather
+  // than with useMemo — this file uses no useMemo anywhere and the closest
+  // precedent (filteredTools above) is also a plain inline .filter() at the
+  // same data scale (~38 tools). Revisit if the registry grows into the
+  // hundreds of tools and this starts showing up in render cost.
+  const countsByCategory = {};
+  for (const cat of categories) {
+    countsByCategory[cat.id] = tools.filter((t) => {
+      if (t.category !== cat.id) return false;
+      if (!isAdmin && (t.status === 'proposed' || t.status === 'rejected')) return false;
+      if (selectedStatus !== 'all' && t.status !== selectedStatus) return false;
+      return true;
+    }).length;
+  }
+
   return (
     <div className="product-grid">
       {categories.map((cat) => {
@@ -398,9 +474,17 @@ function CategoryOverviewGrid({ categories, statistics, onSelect }) {
             </div>
             <p style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--ink-secondary)' }}>{cat.description}</p>
             <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem', fontSize: '0.78rem' }}>
-              <span style={{ color: 'var(--success)', fontWeight: 500 }}>{stats.active || 0} active</span>
-              <span style={{ color: 'var(--warning)', fontWeight: 500 }}>{stats.candidate || 0} candidate</span>
-              <span style={{ color: 'var(--ink-muted)', fontWeight: 500 }}>{stats.total || 0} total</span>
+              {selectedStatus === 'all' ? (
+                <>
+                  <span style={{ color: 'var(--success)', fontWeight: 500 }}>{stats.active || 0} active</span>
+                  <span style={{ color: 'var(--warning)', fontWeight: 500 }}>{stats.candidate || 0} candidate</span>
+                  <span style={{ color: 'var(--ink-muted)', fontWeight: 500 }}>{stats.total || 0} total</span>
+                </>
+              ) : (
+                <span style={{ color: 'var(--ink-secondary)', fontWeight: 500 }}>
+                  {countsByCategory[cat.id]} {STATUS_LABEL[selectedStatus] || selectedStatus}
+                </span>
+              )}
             </div>
           </button>
         );

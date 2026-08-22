@@ -27,6 +27,18 @@ const RISK_COLORS = {
 const RISK_ICONS = { LOW: "✅", MEDIUM: "⚠️", HIGH: "🔴", CRITICAL: "🚨" };
 const VERDICT_ICONS = { LEGITIMATE: "✅", SUSPICIOUS: "⚠️", FRAUDULENT: "🚨" };
 
+// Investigation-step timeline phase colors. CORRECTION (Sprint 6) reuses
+// RISK_COLORS.MEDIUM's amber verbatim rather than inventing a new color —
+// a correction is a warning, not an error. PRE-SCREEN intentionally has no
+// entry here and keeps falling through to the gray default below.
+const PHASE_STYLE = {
+  PLAN:       { dot: "#42a5f5", bg: "#e3f2fd", text: "#1565c0" },
+  GATHER:     { dot: "#66bb6a", bg: "#e8f5e9", text: "#2e7d32" },
+  VERDICT:    { dot: "var(--accent)", bg: "#e8eaf6", text: "#283593" },
+  CORRECTION: { dot: RISK_COLORS.MEDIUM.border, bg: RISK_COLORS.MEDIUM.bg, text: RISK_COLORS.MEDIUM.text },
+};
+const DEFAULT_PHASE_STYLE = { dot: "#bdbdbd", bg: "#f5f5f5", text: "#757575" };
+
 // ── Stat Card ──────────────────────────────────────────────────────────────
 
 function StatCard({ label, value, sublabel, accent }) {
@@ -222,6 +234,23 @@ function ReportPanel({ report, onClose }) {
               {report.summary}
             </p>
           )}
+          {report.unresolved_checks && report.unresolved_checks.length > 0 && (
+            <div style={{
+              marginTop: 12,
+              padding: "10px 14px",
+              borderRadius: 6,
+              background: RISK_COLORS.MEDIUM.bg,
+              border: `1px solid ${RISK_COLORS.MEDIUM.border}`,
+              color: RISK_COLORS.MEDIUM.text,
+              fontSize: 12.5,
+              lineHeight: 1.5,
+            }}>
+              ⚠ {report.unresolved_checks.length} intended check{report.unresolved_checks.length > 1 ? "s" : ""} could
+              not be completed due to invalid tool name{report.unresolved_checks.length > 1 ? "s" : ""}:{" "}
+              <strong>{report.unresolved_checks.map((c) => c.tool_name).join(", ")}</strong>.
+              Confidence may be capped as a result.
+            </div>
+          )}
         </div>
 
         {/* Evidence */}
@@ -264,21 +293,15 @@ function ReportPanel({ report, onClose }) {
                   <div style={{
                     position: "absolute", left: -22, top: 2,
                     width: 12, height: 12, borderRadius: "50%",
-                    background: s.phase === "VERDICT" ? "var(--accent)" : 
-                                s.phase === "GATHER" ? "#66bb6a" :
-                                s.phase === "PLAN" ? "#42a5f5" : "#bdbdbd",
+                    background: (PHASE_STYLE[s.phase] || DEFAULT_PHASE_STYLE).dot,
                     border: "2px solid var(--bg)",
                   }} />
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <span style={{
                       fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace",
                       padding: "1px 6px", borderRadius: 4,
-                      background: s.phase === "VERDICT" ? "#e8eaf6" :
-                                  s.phase === "GATHER" ? "#e8f5e9" :
-                                  s.phase === "PLAN" ? "#e3f2fd" : "#f5f5f5",
-                      color: s.phase === "VERDICT" ? "#283593" :
-                             s.phase === "GATHER" ? "#2e7d32" :
-                             s.phase === "PLAN" ? "#1565c0" : "#757575",
+                      background: (PHASE_STYLE[s.phase] || DEFAULT_PHASE_STYLE).bg,
+                      color: (PHASE_STYLE[s.phase] || DEFAULT_PHASE_STYLE).text,
                     }}>
                       {s.phase}
                     </span>

@@ -420,6 +420,67 @@ class ToolRegistry:
         existing_ids = [t["tool_id"] for t in self._data["tools"] if "tool_id" in t]
         return max(existing_ids, default=0) + 1
 
+    # ── Scan Provenance (tool_scanner.py) ───────────────────────────────────
+
+    def add_scan_history(self, entry: Dict) -> Dict:
+        """
+        Append a scan_history entry and persist. Append-only — never
+        overwrite/replace a prior entry for the same (report_name, profile);
+        repeat scans over time (e.g. after prompt tuning) are legitimate
+        history, not corrections to a previous run.
+
+        Required keys: report_name, report_path, profile, scanned_at,
+        proposals_generated. Uses the same lock/reload/persist pattern as
+        propose_tool()/update_status() — the scanner runs as a separate CLI
+        process, not a Flask request, so this needs the cross-process file
+        lock, not the Flask-only in-memory _registry_lock in routes/fraud.py.
+
+        Returns the stored entry, or {"error": ...} if invalid.
+        """
+        required = ("report_name", "report_path", "profile", "scanned_at", "proposals_generated")
+        missing = [f for f in required if f not in entry]
+        if missing:
+            return {"error": f"Missing required scan_history fields: {', '.join(missing)}"}
+
+        with _CrossProcessLock(self._lock_path):
+            self.load()
+            self._data.setdefault("scan_history", [])
+            self._data["scan_history"].append(entry)
+            self._persist()
+            return entry
+
+    def get_scan_history(self) -> List[Dict]:
+        """
+        Returns scan_history entries enriched with live-computed
+        proposals_approved/rejected/pending, joined against self._data["tools"]
+        by source_detail == entry["report_name"]. Never persisted — computed
+        fresh on every call so it can't go stale relative to status changes
+        made via update_status().
+
+        Two known, disclosed limitations, not fixed here:
+          - The join depends on the exact filename passed at the CLI
+            (tool_scanner.py's source_label). Rescanning the same PDF from a
+            different path/filename produces a new, zero-count report_name
+            instead of joining to prior history.
+          - The join is report-level, not (report, profile)-level: if a
+            report is ever scanned under two different profiles, both
+            resulting scan_history entries show identical aggregate counts,
+            since no tool records which profile produced it. Fixing that
+            fully would mean adding a source_profile field to the tool
+            schema itself — out of scope while the real data never has more
+            than one scan_history entry per report.
+        """
+        out = []
+        for entry in self._data.get("scan_history", []):
+            matching = [t for t in self._data["tools"] if t.get("source_detail") == entry["report_name"]]
+            out.append({
+                **entry,
+                "proposals_approved": sum(1 for t in matching if t["status"] == "candidate"),
+                "proposals_rejected": sum(1 for t in matching if t["status"] == "rejected"),
+                "proposals_pending": sum(1 for t in matching if t["status"] == "proposed"),
+            })
+        return out
+
     def update_status(self, name: str, new_status: str) -> Dict:
         """
         Update a tool's status (e.g. "proposed" -> "candidate") and persist.
@@ -477,6 +538,7 @@ class ToolRegistry:
             "categories": self.list_categories(),
             "tools": self.list_tools(),
             "statistics": self.get_statistics(),
+            "scan_history": self.get_scan_history(),
         }
 
     # ── String Representation ──────────────────────────────────────────────
