@@ -401,7 +401,7 @@ rather than indicative.
 
 # Known Issues — Sprint 7 (scanner pipeline expansion)
 
-## 13. `narrative` profile's section-3.1 extraction reproducibly breaks Ollama's JSON formatting
+## 13. [Confirmed content-driven, not model-specific] `narrative` profile's section-3.1 extraction reproducibly breaks Ollama's JSON formatting
 
 Found during Sprint 7 sign-off, live-scan verification
 (`SPRINT7_TEST_PLAN.md` Part B) — not caught by the mocked test suite, since
@@ -448,6 +448,35 @@ right material — but that content's own heavy nested-numbering structure
 echoing bracket/list conventions from the source text into its own output
 format. Unconfirmed hypothesis; not verified further this sprint.
 
+**Cross-model check, closed out before Sprint 7 sign-off.** The open
+question was whether this is a `llama3.2:latest` (3B)-specific quirk — in
+which case `llama3.2:1b` would be a viable workaround — or driven by the
+section content itself, in which case switching models wouldn't help.
+`llama3.2:1b` (also installed locally) was run against the identical
+`narrative`-profile extraction, twice, for the same reproducibility bar
+applied to the 3B model above:
+
+```
+Attempt 1: ["name": ...] properly {}-wrapped this time, but the response
+           cuts off mid-string ("...to trick ") before the array closes.
+           strip_json_repair(): "Cannot find a repair point in truncated
+           JSON" — its rfind("},{") / rfind('"}') heuristic assumes
+           compact JSON with no whitespace between tokens, and doesn't
+           match Ollama's indented, multi-line output.
+Attempt 2: Same outcome, same error, different truncation point.
+```
+
+**Conclusion: content-driven, not model-specific.** Both models fail
+against this section, for two structurally different reasons — 3B drops
+the object braces entirely; 1B formats correctly but the response is cut
+off before `strip_json_repair()` can find a repair point in indented
+output. A model swap is not a workaround here; the fix has to be either
+prompt-side (harden the format contract, or shrink `max_chars` so genuinely
+complete output fits before truncation) or repair-side (make
+`strip_json_repair()` tolerant of pretty-printed whitespace, not just
+compact JSON). Neither applied this sprint — see fix directions below,
+now updated to reflect both failure modes.
+
 **Not a Sprint 7 regression in the code-correctness sense** — every code
 path Sprint 7 actually added (duplicate detection, `run_scan()`
 orchestration, `scan_history` read/write, the dashboard extension) is
@@ -457,22 +486,31 @@ finding surfaced *by* Sprint 7's live-verification requirement, not a defect
 introduced *by* Sprint 7's changes to `tool_registry.py` or the frontend.
 
 **Fix direction (not applied — a prompt/parsing decision, not a Sprint 7
-architecture change):**
+architecture change), covering both observed failure modes:**
 - Harden the prompt with an explicit one-shot example showing the required
   `{"name": ..., ...}` object shape, since the current prompt states the
   contract in prose only ("output an object with these exact fields") and
-  llama3.2 isn't reliably inferring the brace requirement for this
+  the 3B model isn't reliably inferring the brace requirement for this
   particular content.
-- Extend `strip_json_repair()` to detect and repair the "flat key:value
-  pairs directly inside `[]`" pattern specifically, as a second repair
-  strategy alongside the existing truncation repair.
-- Or: reduce `max_chars` for the `narrative` profile, since the numbered
+- Make `strip_json_repair()`'s repair-point search whitespace-tolerant —
+  its current `rfind("},{")` / `rfind('"}')` heuristic only matches compact
+  JSON with no space/newline between tokens, which is why it couldn't find
+  a repair point in the 1B model's genuinely-truncated but otherwise
+  correctly-indented output. A regex-based search (e.g. `\}\s*,\s*\{` and
+  `"\s*\}`) would catch both the compact and pretty-printed cases.
+- Reduce `max_chars` for the `narrative` profile, since the numbered
   substructure gets denser (more sub-sub-sections) later in the section —
-  a shorter, shallower excerpt may reduce the model's exposure to nested
-  numbering.
+  a shorter excerpt reduces both the 3B model's exposure to nested
+  numbering *and* the 1B model's odds of running out of `num_predict`
+  budget before closing the array.
+- Separately: extend `strip_json_repair()` to detect and repair the "flat
+  key:value pairs directly inside `[]`" pattern (the 3B failure mode
+  specifically), as a second repair strategy alongside truncation repair.
 
 **Priority:** medium. Blocks the `narrative` profile from producing usable
-proposals against this specific report with this specific model right now,
-but doesn't block anything Sprint 7 itself shipped — the scanner's
-provenance-tracking and profile infrastructure work correctly regardless of
-whether a given scan's LLM output happens to parse.
+proposals against this specific report on either locally-available model
+right now, but doesn't block anything Sprint 7 itself shipped — the
+scanner's provenance-tracking and profile infrastructure work correctly
+regardless of whether a given scan's LLM output happens to parse, confirmed
+directly: neither of the four failed live attempts (2 per model) left a
+corrupt or partial `scan_history` entry.
